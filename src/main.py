@@ -231,7 +231,7 @@ class Lexer:
         return tok
 
     def expect(self, kind, value=None):
-        tok = self.next()
+        tok = self.tokens[self.pos]
         if tok[0] != kind or (value is not None and tok[1] != value):
             raise SyntaxError(f'Expected {kind} {value}, got {tok}')
         return tok
@@ -442,7 +442,7 @@ class CodeGenerator:
         code.append(f".ram\t{hex(self.ram_start).upper().replace('0X', '')}h")
         for var_name in sorted(self.symbol_table.keys()):
             address = hex(self.symbol_table[var_name]).upper().replace('0X', '') + 'h'
-            code.append(f"{var_name}:\t.db\t0\t; at {address}")
+            code.append(f"_{var_name}:\t.db\t0\t; at {address}")
 
         code.append("")
         code.append(f".end")
@@ -629,72 +629,40 @@ class CodeGenerator:
         return code, reg
 
 # =====================
-# Example usage
+# Command Line Interface
 # =====================
 if __name__ == '__main__':
-    # Manually construct an AST for demonstration
-    # Equivalent to:
-    # int x = 10;
-    # if (x > 0) {
-    #     return x + 1;
-    # } else {
-    #     return 0;
-    # }
+    if len(sys.argv) < 2:
+        print("Usage: python main.py <source_file>")
+        sys.exit(1)
+
+    source_file = sys.argv[1]
     
-    # We add a var declaration to the AST
-    var_decl = VarDecl(
-        type=TypeNode(name="int"),
-        name="x",
-        init=IntLiteral(value=10)
-    )
+    try:
+        with open(source_file, 'r', encoding='utf-8') as f:
+            code = f.read()
 
-    if_stmt = IfStmt(
-        cond=Binary(op=">", left=Identifier(name="x"), right=IntLiteral(value=0)),
-        then_stmt=Block(statements=[
-            ReturnStmt(value=Binary(op="+", left=Identifier(name="x"), right=IntLiteral(value=1)))
-        ]),
-        else_stmt=Block(statements=[
-            ReturnStmt(value=IntLiteral(value=0))
-        ])
-    )
-    
-    func_decl = FuncDecl(
-        ret_type=TypeNode(name="int"),
-        name="main",
-        params=[],
-        body=Block(statements=[
-            ExprStmt(expr=Assign(op="=", target=Identifier(name="x"), value=IntLiteral(value=10))),
-            if_stmt
-        ])
-    )
-    
-    ast = Program(decls=[func_decl])
+        lexer = Lexer(code)
+        parser = Parser(lexer)
+        ast = parser.parse_program()
+        
+        # ROMとRAMのアドレスを指定してCodeGeneratorをインスタンス化
+        # 実際にはコンパイラオプションとして受け取るとより良い
+        rom_start_address = 0x8000
+        ram_start_address = 0xC000
+        
+        generator = CodeGenerator(rom_start=rom_start_address, ram_start=ram_start_address)
+        z80_code = generator.visit(ast)
+        
+        # 出力
+        print(z80_code)
 
-    # Instantiate and run the code generator with ROM=0x8000 and RAM=0xC000
-    generator = CodeGenerator(rom_start=0x8000, ram_start=0xC000)
-    z80_code = generator.visit(ast)
-    print(z80_code)
-
-    print("\n--- Another example with `while` loop ---")
-    # while (x > 0) { x = x - 1; }
-    while_stmt = WhileStmt(
-        cond=Binary(op=">", left=Identifier(name="x"), right=IntLiteral(value=0)),
-        body=Block(statements=[
-            ExprStmt(expr=Assign(op="=", target=Identifier(name="x"), value=Binary(op="-", left=Identifier(name="x"), right=IntLiteral(value=1))))
-        ])
-    )
-
-    func_while = FuncDecl(
-        ret_type=TypeNode(name="int"),
-        name="loop",
-        params=[],
-        body=Block(statements=[
-            ExprStmt(expr=Assign(op="=", target=Identifier(name="x"), value=IntLiteral(value=5))),
-            while_stmt
-        ])
-    )
-
-    ast_while = Program(decls=[func_while])
-    generator_while = CodeGenerator(rom_start=0x9000, ram_start=0xD000)
-    z80_code_while = generator_while.visit(ast_while)
-    print(z80_code_while)
+    except FileNotFoundError:
+        print(f"Error: The file '{source_file}' was not found.")
+        sys.exit(1)
+    except SyntaxError as e:
+        print(f"Syntax Error: {e}")
+        sys.exit(1)
+    except Exception as e:
+        print(f"An unexpected error occurred: {e}")
+        sys.exit(1)
