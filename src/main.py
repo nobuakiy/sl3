@@ -1,10 +1,14 @@
+# main.py
+
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import List, Optional, Any
 from enum import Enum, auto
+import re
+import sys
 
 # =======================
-# AST ノード定義
+# AST Node Definitions
 # =======================
 
 @dataclass
@@ -171,11 +175,8 @@ class Token:
     value: Any
     pos: int
 
-import re
-import sys
-
 # =====================
-# Token 定義
+# Token Definition
 # =====================
 TOKEN_REGEX = [
     ('NUMBER',   r'\d+'),
@@ -205,7 +206,10 @@ class Lexer:
             if kind == 'NUMBER':
                 self.tokens.append(('NUMBER', int(value)))
             elif kind == 'ID':
-                self.tokens.append(('ID', value))
+                if value in KEYWORDS:
+                    self.tokens.append(('ID', value))
+                else:
+                    self.tokens.append(('ID', value))
             elif kind == 'STRING':
                 self.tokens.append(('STRING', value[1:-1]))
             elif kind == 'OP':
@@ -243,7 +247,7 @@ class Parser:
         nodes = []
         while self.lexer.peek()[0] != 'EOF':
             nodes.append(self.parse_statement())
-        return ('Program', nodes)
+        return Program(nodes)
 
     # ---------- Statement ----------
     def parse_statement(self):
@@ -259,7 +263,7 @@ class Parser:
         else:
             expr = self.parse_expression()
             self.lexer.expect('PUNCT', ';')
-            return ('ExprStmt', expr)
+            return ExprStmt(expr)
 
     def parse_if(self):
         self.lexer.expect('ID', 'if')
@@ -271,7 +275,7 @@ class Parser:
         if self.lexer.peek() == ('ID', 'else'):
             self.lexer.next()
             else_stmt = self.parse_statement()
-        return ('If', cond, then_stmt, else_stmt)
+        return IfStmt(cond, then_stmt, else_stmt)
 
     def parse_while(self):
         self.lexer.expect('ID', 'while')
@@ -279,13 +283,13 @@ class Parser:
         cond = self.parse_expression()
         self.lexer.expect('PUNCT', ')')
         body = self.parse_statement()
-        return ('While', cond, body)
+        return WhileStmt(cond, body)
 
     def parse_return(self):
         self.lexer.expect('ID', 'return')
         expr = self.parse_expression()
         self.lexer.expect('PUNCT', ';')
-        return ('Return', expr)
+        return ReturnStmt(expr)
 
     def parse_block(self):
         self.lexer.expect('PUNCT', '{')
@@ -293,7 +297,7 @@ class Parser:
         while self.lexer.peek() != ('PUNCT', '}'):
             stmts.append(self.parse_statement())
         self.lexer.expect('PUNCT', '}')
-        return ('Block', stmts)
+        return Block(stmts)
 
     # ---------- Expression ----------
     def parse_expression(self):
@@ -304,7 +308,7 @@ class Parser:
         if self.lexer.peek() == ('OP', '='):
             self.lexer.next()
             value = self.parse_assignment()
-            return ('Assign', expr, value)
+            return Assign('=', expr, value)
         return expr
 
     def parse_logical_or(self):
@@ -312,7 +316,7 @@ class Parser:
         while self.lexer.peek() == ('OP', '||'):
             op = self.lexer.next()[1]
             rhs = self.parse_logical_and()
-            expr = ('BinOp', op, expr, rhs)
+            expr = Binary(op, expr, rhs)
         return expr
 
     def parse_logical_and(self):
@@ -320,7 +324,7 @@ class Parser:
         while self.lexer.peek() == ('OP', '&&'):
             op = self.lexer.next()[1]
             rhs = self.parse_equality()
-            expr = ('BinOp', op, expr, rhs)
+            expr = Binary(op, expr, rhs)
         return expr
 
     def parse_equality(self):
@@ -328,7 +332,7 @@ class Parser:
         while self.lexer.peek()[1] in ('==', '!='):
             op = self.lexer.next()[1]
             rhs = self.parse_comparison()
-            expr = ('BinOp', op, expr, rhs)
+            expr = Binary(op, expr, rhs)
         return expr
 
     def parse_comparison(self):
@@ -336,7 +340,7 @@ class Parser:
         while self.lexer.peek()[1] in ('<', '>', '<=', '>='):
             op = self.lexer.next()[1]
             rhs = self.parse_term()
-            expr = ('BinOp', op, expr, rhs)
+            expr = Binary(op, expr, rhs)
         return expr
 
     def parse_term(self):
@@ -344,7 +348,7 @@ class Parser:
         while self.lexer.peek()[1] in ('+', '-'):
             op = self.lexer.next()[1]
             rhs = self.parse_factor()
-            expr = ('BinOp', op, expr, rhs)
+            expr = Binary(op, expr, rhs)
         return expr
 
     def parse_factor(self):
@@ -352,7 +356,7 @@ class Parser:
         while self.lexer.peek()[1] in ('*', '/', '%'):
             op = self.lexer.next()[1]
             rhs = self.parse_unary()
-            expr = ('BinOp', op, expr, rhs)
+            expr = Binary(op, expr, rhs)
         return expr
 
     def parse_unary(self):
@@ -360,17 +364,17 @@ class Parser:
         if tok[1] in ('+', '-', '!', '~'):
             op = self.lexer.next()[1]
             right = self.parse_unary()
-            return ('UnaryOp', op, right)
+            return Unary(op, right)
         return self.parse_primary()
 
     def parse_primary(self):
         tok = self.lexer.peek()
         if tok[0] == 'NUMBER':
-            return ('Number', self.lexer.next()[1])
+            return IntLiteral(self.lexer.next()[1])
         elif tok[0] == 'STRING':
-            return ('String', self.lexer.next()[1])
+            return StringLiteral(self.lexer.next()[1])
         elif tok[0] == 'ID':
-            return ('Var', self.lexer.next()[1])
+            return Identifier(self.lexer.next()[1])
         elif tok == ('PUNCT', '('):
             self.lexer.next()
             expr = self.parse_expression()
@@ -379,19 +383,318 @@ class Parser:
         else:
             raise SyntaxError(f'Unexpected token: {tok}')
 
+# =======================
+# Z80 Code Generator
+# =======================
+
+class CodeGenerator:
+    def __init__(self, rom_start: int, ram_start: int):
+        self.label_counter = 0
+        self.symbol_table = {}
+        self.rom_start = rom_start
+        self.ram_start = ram_start
+        self.ram_address = ram_start
+        self.registers = ['A', 'B', 'C', 'D', 'E', 'H', 'L']
+        self.reg_stack = ['A', 'B', 'C', 'D', 'E', 'H', 'L']
+        self.variables = []
+
+    def allocate_reg(self) -> str:
+        if not self.reg_stack:
+            raise Exception("No more registers available")
+        return self.reg_stack.pop()
+
+    def free_reg(self, reg: str):
+        self.reg_stack.append(reg)
+
+    def get_var_address(self, var_name: str) -> str:
+        if var_name not in self.symbol_table:
+            self.symbol_table[var_name] = self.ram_address
+            self.ram_address += 1 # Assuming 1 byte for simplicity
+            self.variables.append(var_name)
+        return hex(self.symbol_table[var_name]).upper().replace('0X', '') + 'h'
+
+    def generate_label(self, prefix: str) -> str:
+        label = f"{prefix}_{self.label_counter}"
+        self.label_counter += 1
+        return label
+
+    def visit(self, node: Any) -> str:
+        method_name = f"visit_{type(node).__name__}"
+        visitor = getattr(self, method_name, self.generic_visit)
+        return visitor(node)
+
+    def generic_visit(self, node: Any) -> str:
+        raise TypeError(f"No visit_{type(node).__name__} method defined")
+
+    def visit_Program(self, node: Program) -> str:
+        code = [
+            f"; asez80 Assembly Code generated by mini-language compiler",
+            f".rom\t{hex(self.rom_start).upper().replace('0X', '')}h",
+            ""
+        ]
+        
+        # Add function definitions
+        for decl in node.decls:
+            code.append(self.visit(decl))
+        
+        code.append("")
+        code.append(f"; === RAM variables ===")
+        code.append(f".ram\t{hex(self.ram_start).upper().replace('0X', '')}h")
+        for var_name in sorted(self.symbol_table.keys()):
+            address = hex(self.symbol_table[var_name]).upper().replace('0X', '') + 'h'
+            code.append(f"{var_name}:\t.db\t0\t; at {address}")
+
+        code.append("")
+        code.append(f".end")
+        
+        return "\n".join(code)
+
+    def visit_FuncDecl(self, node: FuncDecl) -> str:
+        code = [f"{node.name}:"]
+        # Save registers on the stack
+        code.append("\tPUSH\tIX")
+        code.append("\tPUSH\tBC")
+        code.append("\tPUSH\tDE")
+        # Function body
+        code.append(self.visit(node.body))
+        # Restore registers and return
+        code.append("\tPOP\tDE")
+        code.append("\tPOP\tBC")
+        code.append("\tPOP\tIX")
+        code.append("\tRET")
+        return "\n".join(code)
+    
+    def visit_Block(self, node: Block) -> str:
+        code = []
+        for stmt in node.statements:
+            code.append(self.visit(stmt))
+        return "\n".join(code)
+
+    def visit_IfStmt(self, node: IfStmt) -> str:
+        end_label = self.generate_label("IF_END")
+        
+        # Evaluate the condition expression
+        cond_code, cond_reg = self.visit_expression(node.cond)
+        self.free_reg(cond_reg)
+        code = [cond_code]
+        
+        # Check if condition is false (0)
+        code.append(f"\tOR\tA")
+        
+        if node.else_stmt:
+            else_label = self.generate_label("IF_ELSE")
+            code.append(f"\tJP\tZ,{else_label}")
+        else:
+            code.append(f"\tJP\tZ,{end_label}")
+
+        # Compile 'then' block
+        code.append(self.visit(node.then_stmt))
+        
+        if node.else_stmt:
+            code.append(f"\tJP\t{end_label}")
+            code.append(f"{else_label}:")
+            code.append(self.visit(node.else_stmt))
+
+        code.append(f"{end_label}:")
+        return "\n".join(code)
+
+    def visit_WhileStmt(self, node: WhileStmt) -> str:
+        start_label = self.generate_label("WHILE_START")
+        end_label = self.generate_label("WHILE_END")
+        
+        code = [f"{start_label}:"]
+        
+        # Evaluate condition
+        cond_code, cond_reg = self.visit_expression(node.cond)
+        self.free_reg(cond_reg)
+        code.append(cond_code)
+        
+        # Check if condition is false (0)
+        code.append(f"\tOR\tA")
+        code.append(f"\tJP\tZ,{end_label}")
+
+        # Compile loop body
+        code.append(self.visit(node.body))
+        
+        # Jump back to the start
+        code.append(f"\tJP\t{start_label}")
+        code.append(f"{end_label}:")
+        
+        return "\n".join(code)
+
+    def visit_ReturnStmt(self, node: ReturnStmt) -> str:
+        code = []
+        if node.value:
+            # Evaluate expression and store result in A register
+            expr_code, expr_reg = self.visit_expression(node.value)
+            self.free_reg(expr_reg)
+            code.append(expr_code)
+            if expr_reg != 'A':
+                code.append(f"\tLD\tA,{expr_reg}")
+        code.append("\tRET")
+        return "\n".join(code)
+
+    def visit_ExprStmt(self, node: ExprStmt) -> str:
+        # Evaluate the expression and discard the result
+        code, reg = self.visit_expression(node.expr)
+        self.free_reg(reg)
+        return code
+
+    def visit_Assign(self, node: Assign) -> tuple[str, str]:
+        if isinstance(node.target, Identifier):
+            # Evaluate value expression
+            value_code, value_reg = self.visit_expression(node.value)
+            
+            # Store value in memory
+            var_name = node.target.name
+            code = [
+                value_code,
+                f"\tLD\t(_{var_name}),{value_reg}"
+            ]
+            self.free_reg(value_reg)
+            
+            # Return no-op result
+            return "\n".join(code), 'A'
+        else:
+            raise TypeError("Only Identifier can be assigned to.")
+
+    def visit_expression(self, node: Expr) -> tuple[str, str]:
+        # A helper method to dispatch to the correct visitor for expressions
+        method_name = f"visit_{type(node).__name__}"
+        visitor = getattr(self, method_name, self.generic_visit)
+        return visitor(node)
+
+    def visit_Binary(self, node: Binary) -> tuple[str, str]:
+        left_code, left_reg = self.visit_expression(node.left)
+        right_code, right_reg = self.visit_expression(node.right)
+        
+        code = [left_code, right_code]
+        result_reg = self.allocate_reg()
+        
+        if node.op == '+':
+            code.append(f"\tLD\tA,{left_reg}")
+            code.append(f"\tADD\tA,{right_reg}")
+            code.append(f"\tLD\t{result_reg},A")
+        elif node.op == '-':
+            code.append(f"\tLD\tA,{left_reg}")
+            code.append(f"\tSUB\tA,{right_reg}")
+            code.append(f"\tLD\t{result_reg},A")
+        elif node.op == '*':
+            # Simple multiplication using a loop for example
+            mul_label = self.generate_label("MUL_LOOP")
+            end_mul_label = self.generate_label("MUL_END")
+            code.append(f"\tLD\tA,{left_reg}")
+            code.append(f"\tLD\tB,{right_reg}")
+            code.append(f"\tLD\tC,0") # Result
+            code.append(f"{mul_label}:")
+            code.append(f"\tOR\tB")
+            code.append(f"\tJP\tZ,{end_mul_label}")
+            code.append(f"\tADD\tC,A")
+            code.append(f"\tDEC\tB")
+            code.append(f"\tJP\t{mul_label}")
+            code.append(f"{end_mul_label}:")
+            code.append(f"\tLD\t{result_reg},C")
+        elif node.op == '>':
+            # Comparison: A > B -> result is 1 or 0
+            true_label = self.generate_label("GT_TRUE")
+            end_label = self.generate_label("GT_END")
+            
+            code.append(f"\tLD\tA,{left_reg}")
+            code.append(f"\tCP\t{right_reg}")
+            
+            code.append(f"\tJR\tC,{true_label}")
+            code.append(f"\tLD\t{result_reg},0")
+            code.append(f"\tJP\t{end_label}")
+            code.append(f"{true_label}:")
+            code.append(f"\tLD\t{result_reg},1")
+            code.append(f"{end_label}:")
+
+        self.free_reg(left_reg)
+        self.free_reg(right_reg)
+        
+        return "\n".join(code), result_reg
+
+    def visit_Identifier(self, node: Identifier) -> tuple[str, str]:
+        var_name = node.name
+        # Register a variable if it's the first time we see it
+        self.get_var_address(var_name)
+        
+        reg = self.allocate_reg()
+        code = [f"\tLD\t{reg},(_{var_name})"]
+        return "\n".join(code), reg
+
+    def visit_IntLiteral(self, node: IntLiteral) -> tuple[str, str]:
+        reg = self.allocate_reg()
+        code = f"\tLD\t{reg},{node.value}"
+        return code, reg
+
 # =====================
-# 実行例
+# Example usage
 # =====================
 if __name__ == '__main__':
-    code = r'''
-    if (x > 0) {
-        return x + 1;
-    } else {
-        return 0;
-    }
-    '''
-    lexer = Lexer(code)
-    parser = Parser(lexer)
-    ast = parser.parse_program()
-    from pprint import pprint
-    pprint(ast)
+    # Manually construct an AST for demonstration
+    # Equivalent to:
+    # int x = 10;
+    # if (x > 0) {
+    #     return x + 1;
+    # } else {
+    #     return 0;
+    # }
+    
+    # We add a var declaration to the AST
+    var_decl = VarDecl(
+        type=TypeNode(name="int"),
+        name="x",
+        init=IntLiteral(value=10)
+    )
+
+    if_stmt = IfStmt(
+        cond=Binary(op=">", left=Identifier(name="x"), right=IntLiteral(value=0)),
+        then_stmt=Block(statements=[
+            ReturnStmt(value=Binary(op="+", left=Identifier(name="x"), right=IntLiteral(value=1)))
+        ]),
+        else_stmt=Block(statements=[
+            ReturnStmt(value=IntLiteral(value=0))
+        ])
+    )
+    
+    func_decl = FuncDecl(
+        ret_type=TypeNode(name="int"),
+        name="main",
+        params=[],
+        body=Block(statements=[
+            ExprStmt(expr=Assign(op="=", target=Identifier(name="x"), value=IntLiteral(value=10))),
+            if_stmt
+        ])
+    )
+    
+    ast = Program(decls=[func_decl])
+
+    # Instantiate and run the code generator with ROM=0x8000 and RAM=0xC000
+    generator = CodeGenerator(rom_start=0x8000, ram_start=0xC000)
+    z80_code = generator.visit(ast)
+    print(z80_code)
+
+    print("\n--- Another example with `while` loop ---")
+    # while (x > 0) { x = x - 1; }
+    while_stmt = WhileStmt(
+        cond=Binary(op=">", left=Identifier(name="x"), right=IntLiteral(value=0)),
+        body=Block(statements=[
+            ExprStmt(expr=Assign(op="=", target=Identifier(name="x"), value=Binary(op="-", left=Identifier(name="x"), right=IntLiteral(value=1))))
+        ])
+    )
+
+    func_while = FuncDecl(
+        ret_type=TypeNode(name="int"),
+        name="loop",
+        params=[],
+        body=Block(statements=[
+            ExprStmt(expr=Assign(op="=", target=Identifier(name="x"), value=IntLiteral(value=5))),
+            while_stmt
+        ])
+    )
+
+    ast_while = Program(decls=[func_while])
+    generator_while = CodeGenerator(rom_start=0x9000, ram_start=0xD000)
+    z80_code_while = generator_while.visit(ast_while)
+    print(z80_code_while)
