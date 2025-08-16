@@ -174,6 +174,7 @@ class Token:
     lexeme: str
     value: Any
     pos: int
+    line_num: int # New field for line number
 
 # =====================
 # Token Definition
@@ -193,195 +194,228 @@ TOKEN_REGEX = [
 # Lexer
 # =====================
 class Lexer:
-    def __init__(self, code):
+    def __init__(self, code: str):
         self.tokens = []
         self.pos = 0
+        self.line_num = 1 # Start line number from 1
         self.tokenize(code)
 
-    def tokenize(self, code):
+    def tokenize(self, code: str):
         regex = '|'.join(f'(?P<{name}>{pattern})' for name, pattern in TOKEN_REGEX)
         for mo in re.finditer(regex, code):
             kind = mo.lastgroup
             value = mo.group()
-            if kind == 'NUMBER':
-                self.tokens.append(('NUMBER', int(value)))
+            if kind == 'NEWLINE':
+                self.line_num += 1
+                continue
+            elif kind == 'SKIP':
+                continue
+            elif kind == 'NUMBER':
+                self.tokens.append(Token(TokenType.INT, value, int(value), mo.start(), self.line_num))
             elif kind == 'ID':
                 if value in KEYWORDS:
-                    self.tokens.append(('ID', value))
+                    self.tokens.append(Token(KEYWORDS[value], value, value, mo.start(), self.line_num))
                 else:
-                    self.tokens.append(('ID', value))
+                    self.tokens.append(Token(TokenType.IDENT, value, value, mo.start(), self.line_num))
             elif kind == 'STRING':
-                self.tokens.append(('STRING', value[1:-1]))
+                self.tokens.append(Token(TokenType.STRING, value, value[1:-1], mo.start(), self.line_num))
             elif kind == 'OP':
-                self.tokens.append(('OP', value))
+                # Simplified token mapping for operators
+                if value == '==': self.tokens.append(Token(TokenType.EQEQ, value, value, mo.start(), self.line_num))
+                elif value == '!=': self.tokens.append(Token(TokenType.NEQ, value, value, mo.start(), self.line_num))
+                elif value == '<=': self.tokens.append(Token(TokenType.LE, value, value, mo.start(), self.line_num))
+                elif value == '>=': self.tokens.append(Token(TokenType.GE, value, value, mo.start(), self.line_num))
+                elif value == '&&': self.tokens.append(Token(TokenType.ANDAND, value, value, mo.start(), self.line_num))
+                elif value == '||': self.tokens.append(Token(TokenType.OROR, value, value, mo.start(), self.line_num))
+                elif value == '+': self.tokens.append(Token(TokenType.PLUS, value, value, mo.start(), self.line_num))
+                elif value == '-': self.tokens.append(Token(TokenType.MINUS, value, value, mo.start(), self.line_num))
+                elif value == '*': self.tokens.append(Token(TokenType.STAR, value, value, mo.start(), self.line_num))
+                elif value == '/': self.tokens.append(Token(TokenType.SLASH, value, value, mo.start(), self.line_num))
+                elif value == '%': self.tokens.append(Token(TokenType.PERCENT, value, value, mo.start(), self.line_num))
+                elif value == '<': self.tokens.append(Token(TokenType.LT, value, value, mo.start(), self.line_num))
+                elif value == '>': self.tokens.append(Token(TokenType.GT, value, value, mo.start(), self.line_num))
+                elif value == '=': self.tokens.append(Token(TokenType.EQ, value, value, mo.start(), self.line_num))
+                elif value == '!': self.tokens.append(Token(TokenType.BANG, value, value, mo.start(), self.line_num))
+                elif value == '&': self.tokens.append(Token(TokenType.AMP, value, value, mo.start(), self.line_num))
+                elif value == '|': self.tokens.append(Token(TokenType.BAR, value, value, mo.start(), self.line_num))
+                elif value == '^': self.tokens.append(Token(TokenType.OP, value, value, mo.start(), self.line_num))
+                elif value == '~': self.tokens.append(Token(TokenType.OP, value, value, mo.start(), self.line_num))
             elif kind == 'PUNCT':
-                self.tokens.append(('PUNCT', value))
-            elif kind == 'NEWLINE' or kind == 'SKIP':
-                continue
+                # Simplified token mapping for punctuations
+                if value == '(': self.tokens.append(Token(TokenType.LPAR, value, value, mo.start(), self.line_num))
+                elif value == ')': self.tokens.append(Token(TokenType.RPAR, value, value, mo.start(), self.line_num))
+                elif value == '{': self.tokens.append(Token(TokenType.LBRACE, value, value, mo.start(), self.line_num))
+                elif value == '}': self.tokens.append(Token(TokenType.RBRACE, value, value, mo.start(), self.line_num))
+                elif value == '[': self.tokens.append(Token(TokenType.LBRACK, value, value, mo.start(), self.line_num))
+                elif value == ']': self.tokens.append(Token(TokenType.RBRACK, value, value, mo.start(), self.line_num))
+                elif value == ',': self.tokens.append(Token(TokenType.COMMA, value, value, mo.start(), self.line_num))
+                elif value == ';': self.tokens.append(Token(TokenType.SEMI, value, value, mo.start(), self.line_num))
+                elif value == '.': self.tokens.append(Token(TokenType.DOT, value, value, mo.start(), self.line_num))
             elif kind == 'MISMATCH':
-                raise SyntaxError(f'Unexpected character: {value}')
-        self.tokens.append(('EOF', None))
+                raise SyntaxError(f'Unexpected character: {value} on line {self.line_num}')
+        self.tokens.append(Token(TokenType.EOF, '', None, len(code), self.line_num))
 
-    def peek(self):
+    def peek(self) -> Token:
         return self.tokens[self.pos]
 
-    def next(self):
+    def next(self) -> Token:
         tok = self.tokens[self.pos]
         self.pos += 1
         return tok
 
-    def expect(self, kind, value=None):
-        tok = self.tokens[self.pos]
-        if tok[0] != kind or (value is not None and tok[1] != value):
-            raise SyntaxError(f'Expected {kind} {value}, got {tok}')
+    def expect(self, kind: str, value: Optional[Any] = None) -> Token:
+        tok = self.next()
+        if tok.kind.name != kind or (value is not None and tok.value != value):
+            raise SyntaxError(f"Expected {kind} {value}, got {tok.kind.name} {tok.value} on line {tok.line_num}")
         return tok
 
 # =====================
 # Parser
 # =====================
 class Parser:
-    def __init__(self, lexer):
+    def __init__(self, lexer: Lexer):
         self.lexer = lexer
 
-    def parse_program(self):
+    def parse_program(self) -> Program:
         nodes = []
-        while self.lexer.peek()[0] != 'EOF':
+        while self.lexer.peek().kind != TokenType.EOF:
             nodes.append(self.parse_statement())
         return Program(nodes)
 
     # ---------- Statement ----------
-    def parse_statement(self):
+    def parse_statement(self) -> Stmt:
         tok = self.lexer.peek()
-        if tok == ('ID', 'if'):
+        if tok.kind == TokenType.IF:
             return self.parse_if()
-        elif tok == ('ID', 'while'):
+        elif tok.kind == TokenType.WHILE:
             return self.parse_while()
-        elif tok == ('ID', 'return'):
+        elif tok.kind == TokenType.RETURN:
             return self.parse_return()
-        elif tok == ('PUNCT', '{'):
+        elif tok.kind == TokenType.LBRACE:
             return self.parse_block()
         else:
             expr = self.parse_expression()
-            self.lexer.expect('PUNCT', ';')
+            self.lexer.expect('SEMI', ';')
             return ExprStmt(expr)
 
-    def parse_if(self):
-        self.lexer.expect('ID', 'if')
-        self.lexer.expect('PUNCT', '(')
+    def parse_if(self) -> IfStmt:
+        self.lexer.expect('IF', 'if')
+        self.lexer.expect('LPAR', '(')
         cond = self.parse_expression()
-        self.lexer.expect('PUNCT', ')')
+        self.lexer.expect('RPAR', ')')
         then_stmt = self.parse_statement()
         else_stmt = None
-        if self.lexer.peek() == ('ID', 'else'):
+        if self.lexer.peek().kind == TokenType.ELSE:
             self.lexer.next()
             else_stmt = self.parse_statement()
         return IfStmt(cond, then_stmt, else_stmt)
 
-    def parse_while(self):
-        self.lexer.expect('ID', 'while')
-        self.lexer.expect('PUNCT', '(')
+    def parse_while(self) -> WhileStmt:
+        self.lexer.expect('WHILE', 'while')
+        self.lexer.expect('LPAR', '(')
         cond = self.parse_expression()
-        self.lexer.expect('PUNCT', ')')
+        self.lexer.expect('RPAR', ')')
         body = self.parse_statement()
         return WhileStmt(cond, body)
 
-    def parse_return(self):
-        self.lexer.expect('ID', 'return')
+    def parse_return(self) -> ReturnStmt:
+        self.lexer.expect('RETURN', 'return')
         expr = self.parse_expression()
-        self.lexer.expect('PUNCT', ';')
+        self.lexer.expect('SEMI', ';')
         return ReturnStmt(expr)
 
-    def parse_block(self):
-        self.lexer.expect('PUNCT', '{')
+    def parse_block(self) -> Block:
+        self.lexer.expect('LBRACE', '{')
         stmts = []
-        while self.lexer.peek() != ('PUNCT', '}'):
+        while self.lexer.peek().kind != TokenType.RBRACE:
             stmts.append(self.parse_statement())
-        self.lexer.expect('PUNCT', '}')
+        self.lexer.expect('RBRACE', '}')
         return Block(stmts)
 
     # ---------- Expression ----------
-    def parse_expression(self):
+    def parse_expression(self) -> Expr:
         return self.parse_assignment()
 
-    def parse_assignment(self):
+    def parse_assignment(self) -> Expr:
         expr = self.parse_logical_or()
-        if self.lexer.peek() == ('OP', '='):
+        if self.lexer.peek().kind == TokenType.EQ:
             self.lexer.next()
             value = self.parse_assignment()
             return Assign('=', expr, value)
         return expr
 
-    def parse_logical_or(self):
+    def parse_logical_or(self) -> Expr:
         expr = self.parse_logical_and()
-        while self.lexer.peek() == ('OP', '||'):
-            op = self.lexer.next()[1]
+        while self.lexer.peek().kind == TokenType.OROR:
+            op = self.lexer.next().value
             rhs = self.parse_logical_and()
             expr = Binary(op, expr, rhs)
         return expr
 
-    def parse_logical_and(self):
+    def parse_logical_and(self) -> Expr:
         expr = self.parse_equality()
-        while self.lexer.peek() == ('OP', '&&'):
-            op = self.lexer.next()[1]
+        while self.lexer.peek().kind == TokenType.ANDAND:
+            op = self.lexer.next().value
             rhs = self.parse_equality()
             expr = Binary(op, expr, rhs)
         return expr
 
-    def parse_equality(self):
+    def parse_equality(self) -> Expr:
         expr = self.parse_comparison()
-        while self.lexer.peek()[1] in ('==', '!='):
-            op = self.lexer.next()[1]
+        while self.lexer.peek().kind in (TokenType.EQEQ, TokenType.NEQ):
+            op = self.lexer.next().value
             rhs = self.parse_comparison()
             expr = Binary(op, expr, rhs)
         return expr
 
-    def parse_comparison(self):
+    def parse_comparison(self) -> Expr:
         expr = self.parse_term()
-        while self.lexer.peek()[1] in ('<', '>', '<=', '>='):
-            op = self.lexer.next()[1]
+        while self.lexer.peek().kind in (TokenType.LT, TokenType.GT, TokenType.LE, TokenType.GE):
+            op = self.lexer.next().value
             rhs = self.parse_term()
             expr = Binary(op, expr, rhs)
         return expr
 
-    def parse_term(self):
+    def parse_term(self) -> Expr:
         expr = self.parse_factor()
-        while self.lexer.peek()[1] in ('+', '-'):
-            op = self.lexer.next()[1]
+        while self.lexer.peek().kind in (TokenType.PLUS, TokenType.MINUS):
+            op = self.lexer.next().value
             rhs = self.parse_factor()
             expr = Binary(op, expr, rhs)
         return expr
 
-    def parse_factor(self):
+    def parse_factor(self) -> Expr:
         expr = self.parse_unary()
-        while self.lexer.peek()[1] in ('*', '/', '%'):
-            op = self.lexer.next()[1]
+        while self.lexer.peek().kind in (TokenType.STAR, TokenType.SLASH, TokenType.PERCENT):
+            op = self.lexer.next().value
             rhs = self.parse_unary()
             expr = Binary(op, expr, rhs)
         return expr
 
-    def parse_unary(self):
+    def parse_unary(self) -> Expr:
         tok = self.lexer.peek()
-        if tok[1] in ('+', '-', '!', '~'):
-            op = self.lexer.next()[1]
+        if tok.kind in (TokenType.PLUS, TokenType.MINUS, TokenType.BANG):
+            op = self.lexer.next().value
             right = self.parse_unary()
             return Unary(op, right)
         return self.parse_primary()
 
-    def parse_primary(self):
+    def parse_primary(self) -> Expr:
         tok = self.lexer.peek()
-        if tok[0] == 'NUMBER':
-            return IntLiteral(self.lexer.next()[1])
-        elif tok[0] == 'STRING':
-            return StringLiteral(self.lexer.next()[1])
-        elif tok[0] == 'ID':
-            return Identifier(self.lexer.next()[1])
-        elif tok == ('PUNCT', '('):
+        if tok.kind == TokenType.INT:
+            return IntLiteral(self.lexer.next().value)
+        elif tok.kind == TokenType.STRING:
+            return StringLiteral(self.lexer.next().value)
+        elif tok.kind == TokenType.IDENT:
+            return Identifier(self.lexer.next().value)
+        elif tok.kind == TokenType.LPAR:
             self.lexer.next()
             expr = self.parse_expression()
-            self.lexer.expect('PUNCT', ')')
+            self.lexer.expect('RPAR', ')')
             return expr
         else:
-            raise SyntaxError(f'Unexpected token: {tok}')
+            raise SyntaxError(f"Unexpected token: {tok.kind.name} {tok.value} on line {tok.line_num}")
+
 
 # =======================
 # Z80 Code Generator
@@ -577,7 +611,7 @@ class CodeGenerator:
             code.append(f"\tLD\t{result_reg},A")
         elif node.op == '-':
             code.append(f"\tLD\tA,{left_reg}")
-            code.append(f"\tSUB\tA,{right_reg}")
+            code.append(f"    SUB\tA,{right_reg}")
             code.append(f"\tLD\t{result_reg},A")
         elif node.op == '*':
             # Simple multiplication using a loop for example
