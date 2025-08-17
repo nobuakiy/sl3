@@ -1,5 +1,6 @@
 # --- parser.py ---
-from symbol_table import SymbolTable, VariableSymbol
+from symbol_table import ScopedSymbolTable, VariableSymbol, FunctionSymbol
+from lexer import Token
 
 # --- AST Node Definitions (追加) ---
 # (Program, VarDecl, Type, Variable, Number, BinOpは前回と同じ)
@@ -43,6 +44,11 @@ class VarAccess(AST):
         self.token = token
         self.value = token.value
 
+class ArrayAccess(AST):
+    def __init__(self, var_node, index_expr):
+        self.var_node = var_node
+        self.index_expr = index_expr
+
 # (Program, VarDecl, ..., VarAccessは前回と同じ)
 class IfStatement(AST):
     def __init__(self, condition, then_block, else_block=None):
@@ -59,12 +65,29 @@ class Block(AST):
     def __init__(self, statements):
         self.statements = statements
 
+class FuncDecl(AST):
+    def __init__(self, return_type, name, params, body):
+        self.return_type, self.name, self.params, self.body = return_type, name, params, body
+
+class FuncCall(AST):
+    def __init__(self, name, args):
+        self.name, self.args = name, args
+
+class Param(AST):
+    def __init__(self, type_node, var_node):
+        self.type_node, self.var_node = type_node, var_node
+
+class ReturnStatement(AST):
+    def __init__(self, expr):
+        self.expr = expr
+
+
 # --- Parser Implementation (拡張) ---
 class Parser:
     def __init__(self, tokens):
-        self.symbol_table = SymbolTable()
+        self.symbol_table = ScopedSymbolTable()
         self.tokens = iter(tokens)
-        self.current_token = None
+        self.current_token: Token = None
         self.advance()
         # 演算子の優先順位を定義
         self.precedence = {
@@ -74,19 +97,47 @@ class Parser:
         }
     
     def advance(self):
-        try: self.current_token = next(self.tokens)
-        except StopIteration: self.current_token = None
+        try: 
+            self.current_token = next(self.tokens)
+        except StopIteration:
+            self.current_token = None
 
     def eat(self, token_type):
         if self.current_token and self.current_token.type == token_type:
             self.advance()
-        else: raise SyntaxError(f"Expected {token_type}, got {self.current_token}")
+        else: 
+            raise SyntaxError(f"Expected {token_type}, got {self.current_token}")
 
     def parse(self):
-        statements = []
-        while self.current_token is not None:
-            statements.append(self.parse_statement())
-        return Program(statements)
+        # トップレベルでは関数か変数宣言のみ
+        declarations = []
+        while self.current_token:
+            declarations.append(self.parse_declaration())
+        return Program(declarations)
+
+    def parse_declaration(self):
+        type_node = self.parse_type()
+        name_token = self.current_token
+        self.eat('ID')
+        # 次が'('なら関数宣言、そうでなければ変数宣言
+        if self.current_token.type == 'LPAREN':
+            return self.parse_function_declaration(type_node, name_token)
+        else:
+            return self.parse_variable_declaration(type_node, name_token)
+
+    def parse_function_declaration(self, type_node, name_token):
+        self.eat('LPAREN')
+        # ... パラメータ解析 ...
+        self.eat('RPAREN')
+        
+        # 新しいスコープに入る
+        self.symbol_table.enter_scope()
+        # ... パラメータをシンボルテーブルに登録 ...
+
+        body = self.parse_block_statement()
+        
+        self.symbol_table.leave_scope()
+        # ... FuncDeclノードを返す ...    
 
     def parse_statement(self):
         token_type = self.current_token.type
@@ -137,9 +188,16 @@ class Parser:
         var_token = self.current_token
         self.eat('ID')
         var_node = Variable(var_token)
+        is_array, size = False, 0
+        if self.current_token.type == 'LBRACKET':
+            is_array = True
+            self.eat('LBRACKET')
+            # 配列サイズを解析 (簡単のため今は数値リテラルのみ)
+            size = self.parse_primary().value 
+            self.eat('RBRACKET')
         
-        # シンボルテーブルに登録
-        symbol = VariableSymbol(var_node.value, type_node.value)
+        # シンボルテーブルに配列情報も登録
+        symbol = VariableSymbol(var_node.value, type_node.value, 'local', is_array=is_array, size=size)
         self.symbol_table.define(symbol)
         
         initial_value = None
@@ -186,14 +244,18 @@ class Parser:
 
 
     def parse_primary(self): # 拡張
-        token = self.current_token
+        token: Token = self.current_token
         if token.type == 'INTEGER':
             self.advance()
             return Number(token)
-        elif token.type == 'ID': # 変数参照のケース
+        elif self.current_token.type == 'ID':
+            var_node = Variable(self.current_token)
             self.advance()
-            if not self.symbol_table.lookup(token.value):
-                raise NameError(f"Variable '{token.value}' not declared")
-            return VarAccess(token)
+            if self.current_token.type == 'LBRACKET': # 配列アクセスの解析
+                self.eat('LBRACKET')
+                index_expr = self.parse_expression()
+                self.eat('RBRACKET')
+                return ArrayAccess(var_node, index_expr)
+            return VarAccess(var_node.token) # 通常の変数アクセス
         else:
             raise SyntaxError(f"Unexpected token in expression: {token}")

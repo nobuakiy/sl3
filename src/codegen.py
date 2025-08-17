@@ -1,10 +1,11 @@
 # --- codegen.py ---
-from symbol_table import SymbolTable, VariableSymbol
+from symbol_table import ScopedSymbolTable, VariableSymbol
+from parser import AST, Program, VarDecl, Variable, Number, BinOp, Assignment, VarAccess, ArrayAccess, IfStatement, WhileStatement
 
 class CodeGenerator:
     def __init__(self):
         self.assembly_code = []
-        self.symbol_table = SymbolTable()
+        self.symbol_table = ScopedSymbolTable()
         self.label_count = 0
 
     def new_label(self):
@@ -59,11 +60,40 @@ class CodeGenerator:
             self.visit(node.initial_value) # 式を評価 -> 結果がHLに
             self.assembly_code.append(f"\tld ({var_name}), hl")
 
+    def visit_ArrayAccess(self, node):
+        # 値を読み出す場合
+        # 1. 要素のアドレスをHLに計算
+        self.get_element_address_in_hl(node)
+        
+        # 2. HLが指すアドレスから値をロード
+        self.assembly_code.append("\tld e, (hl)   ; Load low byte")
+        self.assembly_code.append("\tinc hl")
+        self.assembly_code.append("\tld d, (hl)   ; Load high byte")
+        self.assembly_code.append("\tex de, hl    ; Result in HL")
+        
     def visit_Assignment(self, node):
-        var_name = node.left.value
-        self.assembly_code.append(f"; Assign to {var_name}")
-        self.visit(node.right) # 右辺の式を評価 -> 結果がHLに
-        self.assembly_code.append(f"\tld ({var_name}), hl")
+        if isinstance(node.left, VarAccess):
+            # 通常の変数への代入 (前回と同じ)
+            var_name = node.left.value
+            self.assembly_code.append(f"; Assign to {var_name}")
+            self.visit(node.right) # 右辺の式を評価 -> 結果がHLに
+            self.assembly_code.append(f"\tld ({var_name}), hl")
+
+        elif isinstance(node.left, ArrayAccess):
+            # 配列要素への代入
+            self.assembly_code.append("; Assignment to array element")
+            # 1. 右辺の値を評価 -> HL
+            self.visit(node.right)
+            # 2. 計算結果をスタックに退避
+            self.assembly_code.append("\tpush hl")
+            # 3. 左辺の要素アドレスを計算 -> HL
+            self.get_element_address_in_hl(node.left)
+            # 4. 退避した値をDEに復元
+            self.assembly_code.append("\tpop de")
+            # 5. DEの値をHLが指すアドレスにストア
+            self.assembly_code.append("\tld (hl), e   ; Store low byte")
+            self.assembly_code.append("\tinc hl")
+            self.assembly_code.append("\tld (hl), d   ; Store high byte")
 
     def visit_VarAccess(self, node): # 追加
         var_name = node.value
@@ -223,3 +253,27 @@ class CodeGenerator:
 
         # 3. Store A at the address pointed to by HL
         self.assembly_code.append(f"\tld (hl), a ; MEM[addr] = value")
+
+    def get_element_address_in_hl(self, node):
+        """配列要素のアドレスを計算してHLレジスタに入れる"""
+        # (このメソッドは visit_ArrayAccess と visit_Assignment で使用)
+        var_name = node.var_node.value
+        symbol = self.symbol_table.lookup(var_name)
+        
+        self.assembly_code.append(f"; Calculate address for {var_name}[i]")
+        # 1. インデックス`i`の値を評価 -> HL
+        self.visit(node.index_expr)
+        
+        # 2. 要素サイズを乗算 (i * element_size)
+        #    int (2 bytes) の場合は HL = HL * 2 -> ADD HL, HL
+        if symbol.type.value == 'int':
+            self.assembly_code.append("\tadd hl, hl ; index *= 2")
+        
+        # 3. ベースアドレスと加算
+        #    HL = (base_addr) + (i * size)
+        self.assembly_code.append("\tld de, (ix-...) ; Load base address offset")
+        self.assembly_code.append("\tadd hl, de     ; Add base address to offset")
+        # 注: 実際には、IXからのオフセットをシンボルテーブルで管理し、
+        #     IX + 計算済みオフセット のアドレスをHLに入れる必要がある。
+        #     ここでは概念的なコードを示します。
+        
