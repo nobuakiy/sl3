@@ -1,7 +1,7 @@
 from __future__ import annotations
 from typing import Iterator, Optional, NoReturn
 from lexer import Token
-from symbol_table import ScopedSymbolTable, VariableSymbol, FunctionSymbol
+from symbol_table import ScopedSymbolTable, VariableSymbol, FunctionSymbol, Symbol
 
 # --- AST Node Definitions (変更なし) ---
 class AST: pass
@@ -21,6 +21,7 @@ class WhileStatement(AST):
 class FuncDecl(AST):
     def __init__(self, return_type: Type, name_token: Token, params: list[Param], body: Block):
         self.return_type, self.name_token, self.params, self.body = return_type, name_token, params, body
+        self.local_symbols: dict[str, Symbol] = {} # ★ ローカルシンボルを保存する辞書を追加
 class FuncCall(AST):
     def __init__(self, name_token: Token, args: list[AST]): self.name_token, self.args = name_token, args
 class ReturnStatement(AST):
@@ -121,8 +122,16 @@ class Parser:
         self.eat('RPAREN')
         self.symbol_table.enter_scope()
         body = self.parse_block_statement()
+        
+        # ★ leave_scopeの前に、現在のローカルスコープの情報を取得
+        local_symbols = self.symbol_table.scopes[-1]
+        
         self.symbol_table.leave_scope()
-        return FuncDecl(type_node, name_token, params, body)
+        
+        # ★ ASTノードを作成し、ローカルシンボルの情報を保存
+        func_decl_node = FuncDecl(type_node, name_token, params, body)
+        func_decl_node.local_symbols = local_symbols
+        return func_decl_node
 
     def parse_statement(self) -> AST:
         if not self.current_token: self._error("Unexpected end of file")

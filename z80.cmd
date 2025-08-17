@@ -1,0 +1,1 @@
+.\bin\asez80.exe -l output.z80
