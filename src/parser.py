@@ -43,6 +43,22 @@ class VarAccess(AST):
         self.token = token
         self.value = token.value
 
+# (Program, VarDecl, ..., VarAccessは前回と同じ)
+class IfStatement(AST):
+    def __init__(self, condition, then_block, else_block=None):
+        self.condition = condition
+        self.then_block = then_block
+        self.else_block = else_block
+
+class WhileStatement(AST):
+    def __init__(self, condition, body):
+        self.condition = condition
+        self.body = body
+
+class Block(AST):
+    def __init__(self, statements):
+        self.statements = statements
+
 # --- Parser Implementation (拡張) ---
 class Parser:
     def __init__(self, tokens):
@@ -52,10 +68,11 @@ class Parser:
         self.advance()
         # 演算子の優先順位を定義
         self.precedence = {
-            'PLUS': 1, 'MINUS': 1,
-            'MUL': 2, 'DIV': 2,
+            'EQ': 3, 'NE': 3, 'LT': 4, 'GT': 4, 'LE': 4, 'GE': 4,
+            'PLUS': 5, 'MINUS': 5,
+            'MUL': 6, 'DIV': 6,
         }
-
+    
     def advance(self):
         try: self.current_token = next(self.tokens)
         except StopIteration: self.current_token = None
@@ -72,15 +89,49 @@ class Parser:
         return Program(statements)
 
     def parse_statement(self):
-        # 型名から始まれば変数宣言
-        if self.current_token.type in ('INT', 'BYTE'):
+        token_type = self.current_token.type
+        if token_type in ('INT', 'BYTE'):
             return self.parse_variable_declaration()
-        # 識別子から始まれば代入文
-        elif self.current_token.type == 'ID':
+        elif token_type == 'ID':
             return self.parse_assignment_statement()
+        elif token_type == 'IF':
+            return self.parse_if_statement()
+        elif token_type == 'WHILE': # while文の解析を追加
+            return self.parse_while_statement()
         else:
-            raise SyntaxError("Invalid statement")
+            raise SyntaxError(f"Invalid statement starting with {token_type}")
+
+    def parse_if_statement(self):
+        self.eat('IF')
+        self.eat('LPAREN')
+        condition_node = self.parse_expression()
+        self.eat('RPAREN')
+        then_block = self.parse_block_statement()
+        
+        else_block = None
+        if self.current_token and self.current_token.type == 'ELSE':
+            self.eat('ELSE')
+            else_block = self.parse_block_statement()
             
+        return IfStatement(condition_node, then_block, else_block)
+
+    def parse_while_statement(self):
+        self.eat('WHILE')
+        self.eat('LPAREN')
+        condition_node = self.parse_expression()
+        self.eat('RPAREN')
+        body_node = self.parse_block_statement()
+        return WhileStatement(condition_node, body_node)
+
+    def parse_block_statement(self):
+        self.eat('LBRACE')
+        statements = []
+        while self.current_token and self.current_token.type != 'RBRACE':
+            statements.append(self.parse_statement())
+        self.eat('RBRACE')
+        return Block(statements)
+        
+    # ... (他のparseメソッドは前回とほぼ同じ) ...
     def parse_variable_declaration(self):
         type_node = self.parse_type()
         var_token = self.current_token

@@ -28,9 +28,10 @@ if __name__ == '__main__':
     # テスト用のソースファイルを作成
     with open("input.lang", "w") as f:
         f.write("""
-            int x = 15;
-            int y = 0;
-            y = x + 5;
+            int i = 0;
+            while (i < 3) {
+                i = i + 1;
+            }
         """)
 
     main("input.lang", "output.z80")

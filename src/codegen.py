@@ -11,6 +11,7 @@ class CodeGenerator:
         self.label_count += 1
         return f"L{self.label_count}"
 
+    # ... visit_Program, visit_VarDecl などは前回とほぼ同じ ...
     def generate(self, node):
         self.visit(node)
         return "\n".join(self.assembly_code)
@@ -41,12 +42,14 @@ class CodeGenerator:
             code_segment.extend(self.assembly_code)
 
         # 3. 最後に全体を結合
-        self.assembly_code = [".org 0x100", "init:", "ld sp, 0xFFFE"]
-        self.assembly_code.append(";; --- Data Segment ---")
-        self.assembly_code.extend(data_segment)
+        self.assembly_code = [".area CODE(ABS,CSEG)", ".org 0x100", "init:", "ld sp, 0xFFFE"]
         self.assembly_code.append(";; --- Code Segment ---")
         self.assembly_code.extend(code_segment)
         self.assembly_code.extend(["halt", ".end init"])
+        self.assembly_code.append(";; --- Data Segment ---")
+        self.assembly_code.append(".area DATA(ABS,DSEG)")
+        self.assembly_code.append(".org 0x8000")
+        self.assembly_code.extend(data_segment)
 
     def visit_VarDecl(self, node):
         # 初期化がある場合のみコードを生成
@@ -68,7 +71,77 @@ class CodeGenerator:
         # 変数のメモリ位置から値をHLレジスタにロード
         self.assembly_code.append(f"\tld hl, ({var_name})")
 
-    # ... (visit_Number, visit_BinOpは前回と同じ) ...
+    def visit_Block(self, node):
+        for stmt in node.statements:
+            self.visit(stmt)
+
+    def visit_IfStatement(self, node):
+        else_label = self.new_label()
+        endif_label = self.new_label()
+        
+        self.assembly_code.append(f"; If statement")
+        # 1. 条件式を評価 (visit_BinOpがZ80フラグをセットする)
+        self.visit(node.condition)
+        
+        # 2. 条件が偽の場合にelseブロックへジャンプ
+        #    node.condition.op.typeに応じてジャンプ命令を変える
+        op = node.condition.op.type
+        # ジャンプ命令は「条件の逆」を指定する
+        jump_instruction = {
+            'EQ': 'jp nz',  # 等しくない(Not Zero)ならジャンプ
+            'NE': 'jp z',   # 等しい(Zero)ならジャンプ
+            'LT': 'jp nc',  # キャリーなし(Not Carry, a >= b)ならジャンプ
+            'GE': 'jp c',   # キャリーあり(Carry, a < b)ならジャンプ
+            'GT': 'jp c',   # a > b は b < a と同じではない。要SBC後Zフラグ確認
+            'LE': 'jp nz',
+        }[op] # GTとLEはより複雑なため簡略化
+
+        self.assembly_code.append(f"\t{jump_instruction}, {else_label}")
+        
+        # 3. thenブロックのコードを生成
+        self.visit(node.then_block)
+        self.assembly_code.append(f"\tjp {endif_label}") # elseをスキップ
+        
+        # 4. elseブロックのコードを生成
+        self.assembly_code.append(f"{else_label}:")
+        if node.else_block:
+            self.visit(node.else_block)
+            
+        # 5. 終了ラベル
+        self.assembly_code.append(f"{endif_label}:")
+
+    def visit_WhileStatement(self, node):
+        loop_start_label = self.new_label()
+        loop_end_label = self.new_label()
+        
+        self.assembly_code.append(f"; While statement")
+        
+        # 1. ループ開始ラベルを配置
+        self.assembly_code.append(f"{loop_start_label}:")
+        
+        # 2. 条件式を評価
+        self.visit(node.condition)
+        
+        # 3. 条件が偽の場合にループの終わりへジャンプ
+        op = node.condition.op.type
+        jump_instruction = {
+            'EQ': 'jp nz',  # Not Zero -> not equal
+            'NE': 'jp z',   # Zero -> equal
+            'LT': 'jp nc',  # Not Carry -> greater or equal
+            'GE': 'jp c',   # Carry -> less than
+            # GT, LEはより複雑なため簡略化
+        }[op]
+        self.assembly_code.append(f"\t{jump_instruction}, {loop_end_label}")
+        
+        # 4. ループ本体のコードを生成
+        self.visit(node.body)
+        
+        # 5. ループの先頭に戻る無条件ジャンプ
+        self.assembly_code.append(f"\tjp {loop_start_label}")
+        
+        # 6. ループ終了ラベルを配置
+        self.assembly_code.append(f"{loop_end_label}:")
+
 
     # --- Expression Code Generation (追加) ---
     def visit_Number(self, node):
@@ -89,8 +162,18 @@ class CodeGenerator:
         # 3. 退避した右辺の値をDEレジスタに復元
         self.assembly_code.append("\tpop de")
 
+        # 比較演算子の処理を追加
+        if op_type in ('EQ', 'NE', 'LT', 'GT', 'LE', 'GE'):
+            self.assembly_code.append(f"; Begin CompareOp {op_type}")
+            self.visit(node.right)
+            self.assembly_code.append("\tpush hl")
+            self.visit(node.left)
+            self.assembly_code.append("\tpop de")
+            self.assembly_code.append("\tand a      ; Clear carry flag for subtraction")
+            self.assembly_code.append("\tsbc hl, de ; Compare HL and DE (HL - DE)")
+            # この結果、ZフラグとCフラグがセットされる
         # 4. 演算を実行 (結果はHLに格納)
-        if op_type == 'PLUS':
+        elif op_type == 'PLUS':
             self.assembly_code.append("\tadd hl, de ; HL = HL + DE")
         elif op_type == 'MINUS':
             # Z80には16bit減算がないので `SBC` を使う
