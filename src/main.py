@@ -4,7 +4,7 @@ from parser import Parser, AST
 from codegen import CodeGenerator
 
 def main(source_file: str, output_file: str) -> None:
-    with open(source_file, 'r') as f:
+    with open(source_file, 'r', encoding='utf-8') as f:
         source_code: str = f.read()
 
     print("--- 1. Lexing ---")
@@ -32,13 +32,13 @@ def main(source_file: str, output_file: str) -> None:
 
 if __name__ == '__main__':
     # わざとセミコロンを忘れたエラーを含むinput.langを作成
-    with open("input.lang", "w") as f:
-        f.write("""
-int my_global_variable = 100;  // <--- セミコロンを追加
+#     with open("input.lang", "w") as f:
+#         f.write("""
+# int my_global_variable = 100;  // <--- セミコロンを追加
 
-// 3行目
-int main() {
-    return 0;
-}
-""")
+# // 3行目
+# int main() {
+#     return 0;
+# }
+# """)
     main("input.lang", "output.z80")

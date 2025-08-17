@@ -1,5 +1,5 @@
 from __future__ import annotations
-from symbol_table import ScopedSymbolTable, VariableSymbol
+from symbol_table import ScopedSymbolTable, VariableSymbol, Symbol
 from parser import (AST, Program, VarDecl, Assignment, IfStatement, WhileStatement, 
                     FuncDecl, FuncCall, ReturnStatement, Block, ArrayAccess, BinOp, 
                     Number, VarAccess)
@@ -18,6 +18,13 @@ class CodeGenerator:
     def new_label(self) -> str:
         self.label_count += 1
         return f"L{self.label_count}"
+    
+    def get_symbol_size(self, symbol: Symbol) -> int:
+        """シンボルの型からサイズ(バイト)を取得する"""
+        if isinstance(symbol, VariableSymbol):
+            if symbol.type.value == 'int': return 2
+            if symbol.type.value == 'byte': return 1
+        return 2 # 不明な場合はデフォルトでint
 
     def visit(self, node: AST) -> None:
         method_name = f'visit_{type(node).__name__}'
@@ -28,12 +35,13 @@ class CodeGenerator:
         raise NotImplementedError(f"No visit_{type(node).__name__} method")
 
     def visit_Program(self, node: Program) -> None:
-        data_segment = ["; --- Data Segment ---"]
+        data_segment = ["; --- Data Segment ---", ".area DATA(ABS,DSEG)", ".org 0x8000"]
         assert self.symbol_table is not None
         global_vars = self.symbol_table.scopes[0]
         for name, symbol in global_vars.items():
             if isinstance(symbol, VariableSymbol):
-                 size = symbol.size * 2 if symbol.is_array else 2
+                 element_size = self.get_symbol_size(symbol)
+                 size = symbol.size * element_size if symbol.is_array else element_size
                  data_segment.append(f"{name}: .ds {size}")
 
         # 3. コードセグメントの初期化
@@ -47,9 +55,6 @@ class CodeGenerator:
             self.visit(child)
         self.assembly_code.append(".end init")
         # 4. データセグメントのコードを追加
-        self.assembly_code.append(";; --- Data Segment ---")
-        self.assembly_code.append(".area DATA(ABS,DSEG)")
-        self.assembly_code.append(".org 0x8000")
         self.assembly_code.extend(data_segment)
 
     def visit_VarDecl(self, node):
@@ -104,16 +109,27 @@ class CodeGenerator:
         self.assembly_code.append("\tinc hl")
         self.assembly_code.append("\tld d, (hl)   ; Load high byte")
         self.assembly_code.append("\tex de, hl    ; Result in HL")
-        
-    def visit_Assignment(self, node):
-        if isinstance(node.left, VarAccess):
-            # 通常の変数への代入 (前回と同じ)
-            var_name = node.left.value
-            self.assembly_code.append(f"; Assign to {var_name}")
-            self.visit(node.right) # 右辺の式を評価 -> 結果がHLに
-            self.assembly_code.append(f"\tld ({var_name}), hl")
 
+    # 代入処理を更新
+    def visit_Assignment(self, node: Assignment) -> None:
+        # 右辺の式を評価 -> 結果は常に16bitでHLレジスタに入る
+        self.visit(node.right)
+        
+        # 左辺が通常の変数か配列要素かで処理を分岐
+        if isinstance(node.left, VarAccess):
+            var_name = node.left.value
+            assert self.symbol_table is not None
+            symbol = self.symbol_table.lookup(var_name)
+            
+            self.assembly_code.append(f"; Assign to {var_name} ({symbol.type.value})")
+            # 型に応じてストア方法を変更
+            if self.get_symbol_size(symbol) == 2: # int
+                self.assembly_code.append(f"\tld ({var_name}), hl")
+            else: # byte
+                self.assembly_code.append("\tld a, l ; Truncate int to byte")
+                self.assembly_code.append(f"\tld ({var_name}), a")
         elif isinstance(node.left, ArrayAccess):
+            # ... 配列アクセスの代入処理 (同様に型のサイズを考慮) ...
             # 配列要素への代入
             self.assembly_code.append("; Assignment to array element")
             # 1. 右辺の値を評価 -> HL
@@ -129,11 +145,21 @@ class CodeGenerator:
             self.assembly_code.append("\tinc hl")
             self.assembly_code.append("\tld (hl), d   ; Store high byte")
 
-    def visit_VarAccess(self, node): # 追加
+    def visit_VarAccess(self, node: VarAccess) -> None:
         var_name = node.value
-        self.assembly_code.append(f"; Access var {var_name}")
-        # 変数のメモリ位置から値をHLレジスタにロード
-        self.assembly_code.append(f"\tld hl, ({var_name})")
+        assert self.symbol_table is not None
+        symbol = self.symbol_table.lookup(var_name)
+        if not symbol or not isinstance(symbol, VariableSymbol):
+            raise NameError(f"Undefined variable {var_name}")
+
+        self.assembly_code.append(f"; Access var {var_name} ({symbol.type.value})")
+        # 型に応じてロード方法を変更
+        if self.get_symbol_size(symbol) == 2: # int
+            self.assembly_code.append(f"\tld hl, ({var_name})")
+        else: # byte
+            self.assembly_code.append(f"\tld a, ({var_name})")
+            self.assembly_code.append("\tld h, 0")
+            self.assembly_code.append("\tld l, a  ; Promote byte to int in HL")
 
     def visit_Block(self, node):
         for stmt in node.statements:

@@ -1,7 +1,13 @@
+int int_val = 1000;
+byte byte_val = 50;
+int result = 0;
 
-int my_global_variable = 100;  // <--- セミコロンを追加
-
-// 3行目
+// main髢｢謨ｰ繧貞ｮ夂ｾｩ縺励√◎縺ｮ荳ｭ縺ｧ螳溯｡後さ繝ｼ繝峨ｒ蜃ｦ逅�縺吶ｋ
 int main() {
-    return 0;
+    result = int_val + byte_val; 
+    
+    byte byte_val_local = 0;
+    byte_val_local = result; // 莉｣蜈･繧る未謨ｰ縺ｮ荳ｭ
+
+    return result;
 }
