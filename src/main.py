@@ -27,7 +27,10 @@ def main(source_file, output_file):
 if __name__ == '__main__':
     # テスト用のソースファイルを作成
     with open("input.lang", "w") as f:
-        # 乗算の優先順位をテスト
-        f.write("int result = 100 + 2 * 5;")
+        f.write("""
+            int x = 15;
+            int y = 0;
+            y = x + 5;
+        """)
 
     main("input.lang", "output.z80")

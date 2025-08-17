@@ -1,6 +1,5 @@
-class SymbolTable:
-    # ... A class to manage variables, their types, and stack offsets
-    pass
+# --- codegen.py ---
+from symbol_table import SymbolTable, VariableSymbol
 
 class CodeGenerator:
     def __init__(self):
@@ -25,32 +24,51 @@ class CodeGenerator:
         raise NotImplementedError(f"No visit_{type(node).__name__} method for {type(node).__name__}")
 
     def visit_Program(self, node):
-        self.assembly_code.append("\t.org 0x100")
-        self.assembly_code.append("init:")
-        self.assembly_code.append("\tld sp, 0xFFFE")
-        # --- Data Segment ---
-        self.assembly_code.append(";; --- Data Segment ---")
-        for child in node.children:
-            if type(child).__name__ == 'VarDecl':
-                self.assembly_code.append(f"{child.var_node.value}: .ds 2 ; int is 2 bytes")
-
-        self.assembly_code.append(";; --- Code Segment ---")
-        # --- Code Segment ---
-        for child in node.children:
-            if type(child).__name__ == 'VarDecl' and child.initial_value:
-                 self.visit(child) # Visit declarations with initializers
+        data_segment = []
+        code_segment = []
         
-        self.assembly_code.append("\thalt")
-        self.assembly_code.append("\t.end init")
+        # 1. まず全てのグローバル変数の領域を確保
+        for stmt in node.children:
+            if type(stmt).__name__ == 'VarDecl':
+                var_name = stmt.var_node.value
+                data_segment.append(f"{var_name}: .ds 2 ; int is 2 bytes")
+        
+        # 2. 次に実行コードを生成
+        for stmt in node.children:
+            # visitメソッドはコードを self.assembly_code に追加するので、一時的にリセット
+            self.assembly_code = []
+            self.visit(stmt)
+            code_segment.extend(self.assembly_code)
+
+        # 3. 最後に全体を結合
+        self.assembly_code = [".org 0x100", "init:", "ld sp, 0xFFFE"]
+        self.assembly_code.append(";; --- Data Segment ---")
+        self.assembly_code.extend(data_segment)
+        self.assembly_code.append(";; --- Code Segment ---")
+        self.assembly_code.extend(code_segment)
+        self.assembly_code.extend(["halt", ".end init"])
 
     def visit_VarDecl(self, node):
-        # This method is now specifically for handling initialization
-        var_name = node.var_node.value
-        self.assembly_code.append(f"; Initialize {var_name}")
-        # 1. Evaluate the initial value expression. Result will be in HL.
-        self.visit(node.initial_value)
-        # 2. Store the result from HL into the variable's memory location.
+        # 初期化がある場合のみコードを生成
+        if node.initial_value:
+            var_name = node.var_node.value
+            self.assembly_code.append(f"; Initialize {var_name}")
+            self.visit(node.initial_value) # 式を評価 -> 結果がHLに
+            self.assembly_code.append(f"\tld ({var_name}), hl")
+
+    def visit_Assignment(self, node):
+        var_name = node.left.value
+        self.assembly_code.append(f"; Assign to {var_name}")
+        self.visit(node.right) # 右辺の式を評価 -> 結果がHLに
         self.assembly_code.append(f"\tld ({var_name}), hl")
+
+    def visit_VarAccess(self, node): # 追加
+        var_name = node.value
+        self.assembly_code.append(f"; Access var {var_name}")
+        # 変数のメモリ位置から値をHLレジスタにロード
+        self.assembly_code.append(f"\tld hl, ({var_name})")
+
+    # ... (visit_Number, visit_BinOpは前回と同じ) ...
 
     # --- Expression Code Generation (追加) ---
     def visit_Number(self, node):
