@@ -7,6 +7,9 @@ def main(source_file: str, output_file: str) -> None:
     with open(source_file, 'r', encoding='utf-8') as f:
         source_code: str = f.read()
 
+    # ソースコードを行リストに分割
+    source_lines: list[str] = source_code.splitlines()
+
     print("--- 1. Lexing ---")
     lexer = Lexer(source_code)
     tokens: list[Token] = list(lexer.tokenize())
@@ -22,7 +25,7 @@ def main(source_file: str, output_file: str) -> None:
 
     print("--- 3. Generating Code ---")
     generator = CodeGenerator()
-    assembly_code: str = generator.generate(ast, parser.symbol_table)
+    assembly_code: str = generator.generate(ast, parser.symbol_table, source_lines)
 
     with open(output_file, 'w') as f:
         f.write(assembly_code)

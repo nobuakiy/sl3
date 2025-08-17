@@ -9,11 +9,40 @@ class CodeGenerator:
         self.assembly_code: list[str] = []
         self.label_count: int = 0
         self.symbol_table: ScopedSymbolTable | None = None
+        self.source_lines: list[str] = []
+        self.last_commented_line: int = -1 # コメントの重複出力を防ぐ        
 
-    def generate(self, node: AST, symbol_table: ScopedSymbolTable) -> str:
+    def generate(self, node: AST, symbol_table: ScopedSymbolTable, source_lines: list[str]) -> str:
         self.symbol_table = symbol_table
+        self.source_lines = source_lines # ★ ソース行リストを保持
         self.visit(node)
         return "\n".join(self.assembly_code)
+
+    def _get_start_line(self, node: AST) -> int:
+        """ASTノードからソースの開始行番号を取得するヘルパー"""
+        if hasattr(node, 'token'):
+            return node.token.line
+        if hasattr(node, 'name_token'):
+            return node.name_token.line
+        if hasattr(node, 'start_token'): # 今後、明示的に開始トークンを持たせる場合
+            return node.start_token.line
+        # 再帰的に左端のトークンを探す
+        if hasattr(node, 'left'):
+            return self._get_start_line(node.left)
+        if hasattr(node, 'var_node'):
+            return self._get_start_line(node.var_node)
+        # フォールバック
+        return -1
+
+    def _emit_source_comment(self, node: AST) -> None:
+        """ASTノードに対応するソース行をコメントとして出力する"""
+        line_num = self._get_start_line(node)
+        if line_num != -1 and line_num != self.last_commented_line:
+            # 行番号は1から始まるが、リストのインデックスは0から始まる
+            source_line = self.source_lines[line_num - 1].strip()
+            if source_line: # 空行はコメントしない
+                self.assembly_code.append(f"\n; {source_line}")
+                self.last_commented_line = line_num
 
     def new_label(self) -> str:
         self.label_count += 1
@@ -86,6 +115,7 @@ class CodeGenerator:
 
 
     def visit_VarDecl(self, node):
+        self._emit_source_comment(node)  # ソースコードの行をコメントとして出力
         # 初期化がある場合のみコードを生成
         if node.initial_value:
             var_name = node.var_node.value
@@ -146,6 +176,7 @@ class CodeGenerator:
         # ... スタッククリーンアップ ...
 
     def visit_ReturnStatement(self, node):
+        self._emit_source_comment(node)  # ソースコードの行をコメントとして出力
         self.assembly_code.append("; Return statement")
         self.visit(node.expr) # 戻り値をHLに計算
         # ... 関数のエピローグへジャンプ ...
@@ -194,6 +225,8 @@ class CodeGenerator:
                 self.assembly_code.append(f"\tld l, a")
 
     def visit_Assignment(self, node: Assignment) -> None:
+        self._emit_source_comment(node)  # ソースコードの行をコメントとして出力
+
         # 1. 右辺の式を評価 -> 結果はHLに入る
         self.visit(node.right)
         
@@ -248,6 +281,8 @@ class CodeGenerator:
             self.visit(stmt)
 
     def visit_IfStatement(self, node):
+        self._emit_source_comment(node)  # ソースコードの行をコメントとして出力
+
         else_label = self.new_label()
         endif_label = self.new_label()
         
@@ -283,6 +318,8 @@ class CodeGenerator:
         self.assembly_code.append(f"{endif_label}:")
 
     def visit_WhileStatement(self, node):
+        self._emit_source_comment(node)  # ソースコードの行をコメントとして出力
+        
         loop_start_label = self.new_label()
         loop_end_label = self.new_label()
         
