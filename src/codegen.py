@@ -22,42 +22,70 @@ class CodeGenerator:
         return visitor(node)
 
     def generic_visit(self, node):
-        raise NotImplementedError(f"No visit_{type(node).__name__} method")
+        raise NotImplementedError(f"No visit_{type(node).__name__} method for {type(node).__name__}")
 
     def visit_Program(self, node):
-        # Basic setup for asez80
-        self.assembly_code.append("\t.org 0x100") # Example start address
+        self.assembly_code.append("\t.org 0x100")
         self.assembly_code.append("init:")
-        self.assembly_code.append("\tld sp, 0xFFFE ; Setup stack pointer")
-        # In a full compiler, we'd call a 'main' function
-        # For now, just execute global statements
+        self.assembly_code.append("\tld sp, 0xFFFE")
+        # --- Data Segment ---
+        self.assembly_code.append(";; --- Data Segment ---")
         for child in node.children:
-            self.visit(child)
+            if type(child).__name__ == 'VarDecl':
+                self.assembly_code.append(f"{child.var_node.value}: .ds 2 ; int is 2 bytes")
+
+        self.assembly_code.append(";; --- Code Segment ---")
+        # --- Code Segment ---
+        for child in node.children:
+            if type(child).__name__ == 'VarDecl' and child.initial_value:
+                 self.visit(child) # Visit declarations with initializers
+        
         self.assembly_code.append("\thalt")
         self.assembly_code.append("\t.end init")
 
     def visit_VarDecl(self, node):
+        # This method is now specifically for handling initialization
         var_name = node.var_node.value
-        var_type = node.type_node.value
-        
-        # This is a simplified example for local variables
-        # For now, we treat them as globals for simplicity
-        # A real implementation would handle stack allocation.
-        
-        self.assembly_code.append(f"; Variable Declaration for {var_name}")
-        if var_type == 'int':
-            size = 2 # 16 bits
-        elif var_type == 'byte':
-            size = 1 # 8 bits
-        else:
-            raise TypeError(f"Unknown type: {var_type}")
+        self.assembly_code.append(f"; Initialize {var_name}")
+        # 1. Evaluate the initial value expression. Result will be in HL.
+        self.visit(node.initial_value)
+        # 2. Store the result from HL into the variable's memory location.
+        self.assembly_code.append(f"\tld ({var_name}), hl")
 
-        # In a real compiler, we would add to symbol table with its memory location
-        # self.symbol_table.define(var_name, var_type, memory_address)
+    # --- Expression Code Generation (追加) ---
+    def visit_Number(self, node):
+        self.assembly_code.append(f"; Load number {node.value}")
+        self.assembly_code.append(f"\tld hl, {node.value}")
+
+    def visit_BinOp(self, node):
+        op_type = node.op.type
+        self.assembly_code.append(f"; Begin BinOp {op_type}")
+
+        # 1. 右辺 (RHS) を評価し、結果をスタックに退避
+        self.visit(node.right)
+        self.assembly_code.append("\tpush hl")
         
-        # Here we just define a label and reserve space in memory
-        self.assembly_code.append(f"{var_name}:")
-        self.assembly_code.append(f"\t.ds {size}")
+        # 2. 左辺 (LHS) を評価 (結果はHLに残る)
+        self.visit(node.left)
+        
+        # 3. 退避した右辺の値をDEレジスタに復元
+        self.assembly_code.append("\tpop de")
+
+        # 4. 演算を実行 (結果はHLに格納)
+        if op_type == 'PLUS':
+            self.assembly_code.append("\tadd hl, de ; HL = HL + DE")
+        elif op_type == 'MINUS':
+            # Z80には16bit減算がないので `SBC` を使う
+            self.assembly_code.append("\tand a ; Clear carry flag")
+            self.assembly_code.append("\tsbc hl, de ; HL = HL - DE")
+        elif op_type == 'MUL':
+            # 乗算は複雑なので、ここでは単純な加算で代用 (本来はサブルーチンを呼ぶ)
+            self.assembly_code.append("; Multiplication (placeholder)")
+            self.assembly_code.append("\t; TODO: Implement multiplication routine")
+        else:
+            raise NotImplementedError(f"Operator {op_type} not implemented")
+        
+        self.assembly_code.append(f"; End BinOp {op_type}")
 
     # --- Code Generation for specific features ---
     
