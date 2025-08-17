@@ -1,0 +1,7 @@
+
+int my_global_variable = 100;  // <--- セミコロンを追加
+
+// 3行目
+int main() {
+    return 0;
+}

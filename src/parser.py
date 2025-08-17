@@ -1,261 +1,268 @@
-# --- parser.py ---
-from symbol_table import ScopedSymbolTable, VariableSymbol, FunctionSymbol
+from __future__ import annotations
+from typing import Iterator, Optional
 from lexer import Token
+from symbol_table import ScopedSymbolTable, VariableSymbol, FunctionSymbol
 
-# --- AST Node Definitions (追加) ---
-# (Program, VarDecl, Type, Variable, Number, BinOpは前回と同じ)
+# --- AST Node Definitions ---
 class AST: pass
 
 class Program(AST):
-    def __init__(self, children):
-        self.children = children
+    def __init__(self, children: list[AST]): self.children: list[AST] = children
 
 class VarDecl(AST):
-    def __init__(self, type_node, var_node, initial_value=None):
-        self.type_node = type_node
-        self.var_node = var_node
-        self.initial_value = initial_value
-        
-class Type(AST):
-    def __init__(self, token):
-        self.token = token; self.value = token.value
-
-class Variable(AST):
-    def __init__(self, token):
-        self.token = token; self.value = token.value
-
-class Number(AST): # 数値リテラルを表すノード
-    def __init__(self, token):
-        self.token = token; self.value = token.value
-
-class BinOp(AST): # 二項演算を表すノード (例: left + right)
-    def __init__(self, left, op, right):
-        self.left = left
-        self.op = op
-        self.right = right
+    def __init__(self, type_node: Type, var_node: Token, initial_value: Optional[AST] = None, is_array: bool = False, size: int = 0):
+        self.type_node, self.var_node, self.initial_value = type_node, var_node, initial_value
+        self.is_array, self.size = is_array, size
 
 class Assignment(AST):
-    def __init__(self, left, right):
-        self.left = left  # The variable to assign to
-        self.right = right # The expression
+    def __init__(self, left: AST, right: AST): self.left, self.right = left, right
 
-class VarAccess(AST):
-    def __init__(self, token):
-        self.token = token
-        self.value = token.value
-
-class ArrayAccess(AST):
-    def __init__(self, var_node, index_expr):
-        self.var_node = var_node
-        self.index_expr = index_expr
-
-# (Program, VarDecl, ..., VarAccessは前回と同じ)
 class IfStatement(AST):
-    def __init__(self, condition, then_block, else_block=None):
-        self.condition = condition
-        self.then_block = then_block
-        self.else_block = else_block
+    def __init__(self, condition: AST, then_block: Block, else_block: Optional[Block] = None):
+        self.condition, self.then_block, self.else_block = condition, then_block, else_block
 
 class WhileStatement(AST):
-    def __init__(self, condition, body):
-        self.condition = condition
-        self.body = body
-
-class Block(AST):
-    def __init__(self, statements):
-        self.statements = statements
+    def __init__(self, condition: AST, body: Block): self.condition, self.body = condition, body
 
 class FuncDecl(AST):
-    def __init__(self, return_type, name, params, body):
-        self.return_type, self.name, self.params, self.body = return_type, name, params, body
+    def __init__(self, return_type: Type, name_token: Token, params: list[Param], body: Block):
+        self.return_type, self.name_token, self.params, self.body = return_type, name_token, params, body
 
 class FuncCall(AST):
-    def __init__(self, name, args):
-        self.name, self.args = name, args
-
-class Param(AST):
-    def __init__(self, type_node, var_node):
-        self.type_node, self.var_node = type_node, var_node
+    def __init__(self, name_token: Token, args: list[AST]): self.name_token, self.args = name_token, args
 
 class ReturnStatement(AST):
-    def __init__(self, expr):
-        self.expr = expr
+    def __init__(self, expr: AST): self.expr: AST = expr
 
+class Block(AST):
+    def __init__(self, statements: list[AST]): self.statements: list[AST] = statements
 
-# --- Parser Implementation (拡張) ---
+class ArrayAccess(AST):
+    def __init__(self, var_node: VarAccess, index_expr: AST): self.var_node, self.index_expr = var_node, index_expr
+
+class BinOp(AST):
+    def __init__(self, left: AST, op: Token, right: AST): self.left, self.op, self.right = left, op, right
+
+class Number(AST):
+    def __init__(self, token: Token): self.token, self.value = token, token.value
+
+class VarAccess(AST):
+    def __init__(self, token: Token): self.token, self.value = token, token.value
+
+class Type(AST):
+    def __init__(self, token: Token): self.token, self.value = token, token.value
+
+class Param(AST):
+    def __init__(self, type_node: Type, var_node: Token): self.type_node, self.var_node = type_node, var_node
+
 class Parser:
-    def __init__(self, tokens):
-        self.symbol_table = ScopedSymbolTable()
-        self.tokens = iter(tokens)
-        self.current_token: Token = None
-        self.advance()
-        # 演算子の優先順位を定義
-        self.precedence = {
-            'EQ': 3, 'NE': 3, 'LT': 4, 'GT': 4, 'LE': 4, 'GE': 4,
-            'PLUS': 5, 'MINUS': 5,
-            'MUL': 6, 'DIV': 6,
-        }
-    
-    def advance(self):
-        try: 
-            self.current_token = next(self.tokens)
-        except StopIteration:
-            self.current_token = None
+    def __init__(self, tokens: Iterator[Token], source_code: str):
+        self.tokens: Iterator[Token] = tokens
+        self.current_token: Optional[Token] = None
+        self.peek_token: Optional[Token] = None
+        
+        # ソースコードを行ごとに分割して保持
+        self.source_lines: list[str] = source_code.splitlines()
 
-    def eat(self, token_type):
+        self.advance()
+        self.advance()
+        self.symbol_table: ScopedSymbolTable = ScopedSymbolTable()
+        self.precedence: dict[str, int] = {'EQ': 3, 'NE': 3, 'LT': 4, 'GT': 4, 'LE': 4, 'GE': 4, 'PLUS': 5, 'MINUS': 5, 'MUL': 6, 'DIV': 6}
+
+    def _error(self, message: str, token: Optional[Token] = None) -> NoReturn:
+        """エラーメッセージを整形してSyntaxErrorを発生させる"""
+        token = token or self.current_token
+        err_line = "<source not available>"
+        pointer = ""
+        line_info = ""
+
+        if token:
+            line_num = token.line
+            col_num = token.column
+            line_info = f"on line {line_num}, column {col_num}"
+            if line_num > 0 and line_num <= len(self.source_lines):
+                err_line = self.source_lines[line_num - 1]
+                # タブ文字をスペースに変換して桁ズレを防ぐ
+                err_line = err_line.replace('\t', '    ')
+                pointer = " " * col_num + "^"
+        
+        full_message = (
+            f"\n\n--- Compilation Error ---\n"
+            f"Syntax Error {line_info}:\n"
+            f"{message}\n\n"
+            f"> {err_line}\n"
+            f"  {pointer}\n"
+        )
+        raise SyntaxError(full_message)
+
+    def advance(self) -> None:
+        self.current_token = self.peek_token
+        try: self.peek_token = next(self.tokens)
+        except StopIteration: self.peek_token = None
+
+    def eat(self, token_type: str) -> None:
         if self.current_token and self.current_token.type == token_type:
             self.advance()
-        else: 
-            raise SyntaxError(f"Expected {token_type}, got {self.current_token}")
+        else:
+            # ここで直接エラーを発生させる代わりに _error メソッドを呼ぶ
+            expected_type = self.current_token.type if self.current_token else 'EOF'
+            self._error(f"Expected token '{token_type}', but got '{expected_type}'")
 
-    def parse(self):
-        # トップレベルでは関数か変数宣言のみ
-        declarations = []
-        while self.current_token:
-            declarations.append(self.parse_declaration())
+    def parse(self) -> Program:
+        declarations: list[AST] = []
+        while self.current_token: declarations.append(self.parse_declaration())
         return Program(declarations)
 
-    def parse_declaration(self):
+    def parse_declaration(self) -> AST:
         type_node = self.parse_type()
         name_token = self.current_token
         self.eat('ID')
-        # 次が'('なら関数宣言、そうでなければ変数宣言
-        if self.current_token.type == 'LPAREN':
+        if self.current_token and self.current_token.type == 'LPAREN':
             return self.parse_function_declaration(type_node, name_token)
         else:
             return self.parse_variable_declaration(type_node, name_token)
 
-    def parse_function_declaration(self, type_node, name_token):
-        self.eat('LPAREN')
-        # ... パラメータ解析 ...
-        self.eat('RPAREN')
+    def parse_variable_declaration(self, type_node: Type, name_token: Token) -> VarDecl:
+        is_array, size = False, 0
+        if self.current_token and self.current_token.type == 'LBRACKET':
+            is_array, size = True, self._parse_array_size()
         
-        # 新しいスコープに入る
+        scope = 'global' if self.symbol_table.scope_level == 0 else 'local'
+        symbol = VariableSymbol(name_token.value, type_node, scope, is_array=is_array, size=size)
+        self.symbol_table.define(symbol)
+        
+        initial_value = None
+        if self.current_token and self.current_token.type == 'ASSIGN':
+            self.eat('ASSIGN'); initial_value = self.parse_expression()
+        self.eat('SEMICOLON')
+        return VarDecl(type_node, name_token, initial_value, is_array, size)
+
+    def _parse_array_size(self) -> int:
+        self.eat('LBRACKET')
+        size_node = self.parse_primary()
+        if not isinstance(size_node, Number): raise TypeError("Array size must be an integer literal")
+        self.eat('RBRACKET')
+        return size_node.value
+
+    def parse_function_declaration(self, type_node: Type, name_token: Token) -> FuncDecl:
+        self.eat('LPAREN')
+        params: list[Param] = []
+        if self.current_token and self.current_token.type != 'RPAREN':
+            # ... パラメータ解析の実装 ...
+            pass
+        self.eat('RPAREN')
+
+        func_symbol = FunctionSymbol(name_token.value, type_node, params)
+        self.symbol_table.define(func_symbol)
+        
         self.symbol_table.enter_scope()
-        # ... パラメータをシンボルテーブルに登録 ...
-
         body = self.parse_block_statement()
-        
         self.symbol_table.leave_scope()
-        # ... FuncDeclノードを返す ...    
+        return FuncDecl(type_node, name_token, params, body)
 
-    def parse_statement(self):
-        token_type = self.current_token.type
-        if token_type in ('INT', 'BYTE'):
-            return self.parse_variable_declaration()
-        elif token_type == 'ID':
+    def parse_statement(self) -> AST:
+        if not self.current_token: self._error("Unexpected end of file")
+        tok_type = self.current_token.type
+        if tok_type in ('INT', 'BYTE'): 
+            return self.parse_variable_declaration(self.parse_type(), self.current_token)
+        if tok_type == 'ID': 
             return self.parse_assignment_statement()
-        elif token_type == 'IF':
+        if tok_type == 'IF': 
             return self.parse_if_statement()
-        elif token_type == 'WHILE': # while文の解析を追加
+        if tok_type == 'WHILE': 
             return self.parse_while_statement()
-        else:
-            raise SyntaxError(f"Invalid statement starting with {token_type}")
+        if tok_type == 'RETURN': 
+            return self.parse_return_statement()
+        if tok_type == 'LBRACE': 
+            return self.parse_block_statement()
+        self._error(f"Invalid statement starting with {tok_type}")
 
-    def parse_if_statement(self):
-        self.eat('IF')
-        self.eat('LPAREN')
-        condition_node = self.parse_expression()
-        self.eat('RPAREN')
-        then_block = self.parse_block_statement()
-        
-        else_block = None
-        if self.current_token and self.current_token.type == 'ELSE':
-            self.eat('ELSE')
-            else_block = self.parse_block_statement()
-            
-        return IfStatement(condition_node, then_block, else_block)
-
-    def parse_while_statement(self):
-        self.eat('WHILE')
-        self.eat('LPAREN')
-        condition_node = self.parse_expression()
-        self.eat('RPAREN')
-        body_node = self.parse_block_statement()
-        return WhileStatement(condition_node, body_node)
-
-    def parse_block_statement(self):
+    def parse_block_statement(self) -> Block:
         self.eat('LBRACE')
-        statements = []
+        statements: list[AST] = []
         while self.current_token and self.current_token.type != 'RBRACE':
             statements.append(self.parse_statement())
         self.eat('RBRACE')
         return Block(statements)
-        
-    # ... (他のparseメソッドは前回とほぼ同じ) ...
-    def parse_variable_declaration(self):
-        type_node = self.parse_type()
-        var_token = self.current_token
-        self.eat('ID')
-        var_node = Variable(var_token)
-        is_array, size = False, 0
-        if self.current_token.type == 'LBRACKET':
-            is_array = True
-            self.eat('LBRACKET')
-            # 配列サイズを解析 (簡単のため今は数値リテラルのみ)
-            size = self.parse_primary().value 
+
+    def parse_assignment_statement(self) -> Assignment:
+        name_token = self.current_token
+        self.eat('ID'); 
+        left_node: AST = VarAccess(name_token)
+        if self.current_token and self.current_token.type == 'LBRACKET':
+            self.eat('LBRACKET'); 
+            index_expr = self.parse_expression(); 
             self.eat('RBRACKET')
-        
-        # シンボルテーブルに配列情報も登録
-        symbol = VariableSymbol(var_node.value, type_node.value, 'local', is_array=is_array, size=size)
-        self.symbol_table.define(symbol)
-        
-        initial_value = None
-        if self.current_token.type == 'ASSIGN':
-            self.eat('ASSIGN')
-            initial_value = self.parse_expression()
-
-        self.eat('SEMICOLON')
-        return VarDecl(type_node, var_node, initial_value)
-
-    def parse_assignment_statement(self):
-        var_token = self.current_token
-        self.eat('ID')
-        
-        # 変数が宣言済みかチェック
-        if not self.symbol_table.lookup(var_token.value):
-            raise NameError(f"Variable '{var_token.value}' not declared")
-            
-        left_node = VarAccess(var_token)
-        self.eat('ASSIGN')
-        right_node = self.parse_expression()
+            left_node = ArrayAccess(left_node, index_expr)
+        self.eat('ASSIGN'); 
+        right_node = self.parse_expression(); 
         self.eat('SEMICOLON')
         return Assignment(left_node, right_node)
-
-    # ... (parse_type, parse_expressionは前回と同じ) ...
-    def parse_type(self):
-        token = self.current_token
-        if token.type in ('INT', 'BYTE', 'VOID'):
-            self.advance()
-            return Type(token)
-        else: raise SyntaxError("Expected a type specifier")
-
-    # --- Expression Parsing Logic ---
-    def parse_expression(self, prec=0):
-        node = self.parse_primary() # 数値や括弧などを解析
         
+    def parse_if_statement(self) -> IfStatement:
+        self.eat('IF'); 
+        self.eat('LPAREN'); 
+        condition = self.parse_expression(); 
+        self.eat('RPAREN')
+        then_block = self.parse_block_statement()
+        else_block = None
+        if self.current_token and self.current_token.type == 'ELSE':
+            self.eat('ELSE'); 
+            else_block = self.parse_block_statement()
+        return IfStatement(condition, then_block, else_block)
+
+    def parse_while_statement(self) -> WhileStatement:
+        self.eat('WHILE'); 
+        self.eat('LPAREN'); 
+        condition = self.parse_expression(); 
+        self.eat('RPAREN')
+        body = self.parse_block_statement()
+        return WhileStatement(condition, body)
+        
+    def parse_return_statement(self) -> ReturnStatement:
+        self.eat('RETURN'); 
+        expr = self.parse_expression(); 
+        self.eat('SEMICOLON')
+        return ReturnStatement(expr)
+
+    def parse_type(self) -> Type:
+        token = self.current_token
+        if token and token.type in ('INT', 'BYTE', 'VOID'): 
+            self.advance(); 
+            return Type(token)
+        self._error("Expected a type specifier")
+
+    def parse_expression(self, prec: int = 0) -> AST:
+        node = self.parse_primary()
         while self.current_token and self.current_token.type in self.precedence and self.precedence[self.current_token.type] > prec:
             op_token = self.current_token
             self.advance()
             right_node = self.parse_expression(self.precedence[op_token.type])
             node = BinOp(left=node, op=op_token, right=right_node)
-            
         return node
 
+    def parse_primary(self) -> AST:
+        token = self.current_token
+        if not token: 
+            self._error("Unexpected end of expression")
+        if token.type == 'INTEGER': self.advance(); return Number(token)
+        if token.type == 'ID':
+            name_token = token
+            if self.peek_token and self.peek_token.type == 'LPAREN': return self.parse_function_call()
+            self.advance()
+            if self.current_token and self.current_token.type == 'LBRACKET':
+                self.eat('LBRACKET'); index_expr = self.parse_expression(); self.eat('RBRACKET')
+                return ArrayAccess(VarAccess(name_token), index_expr)
+            return VarAccess(name_token)
+        self._error(f"Unexpected token in expression: {token}")
 
-    def parse_primary(self): # 拡張
-        token: Token = self.current_token
-        if token.type == 'INTEGER':
-            self.advance()
-            return Number(token)
-        elif self.current_token.type == 'ID':
-            var_node = Variable(self.current_token)
-            self.advance()
-            if self.current_token.type == 'LBRACKET': # 配列アクセスの解析
-                self.eat('LBRACKET')
-                index_expr = self.parse_expression()
-                self.eat('RBRACKET')
-                return ArrayAccess(var_node, index_expr)
-            return VarAccess(var_node.token) # 通常の変数アクセス
-        else:
-            raise SyntaxError(f"Unexpected token in expression: {token}")
+    def parse_function_call(self) -> FuncCall:
+        name_token = self.current_token
+        self.eat('ID'); self.eat('LPAREN')
+        args: list[AST] = []
+        if self.current_token and self.current_token.type != 'RPAREN':
+            args.append(self.parse_expression())
+            while self.current_token and self.current_token.type == 'COMMA':
+                self.eat('COMMA'); args.append(self.parse_expression())
+        self.eat('RPAREN')
+        return FuncCall(name_token, args)

@@ -1,52 +1,52 @@
-# --- codegen.py ---
+from __future__ import annotations
 from symbol_table import ScopedSymbolTable, VariableSymbol
-from parser import AST, Program, VarDecl, Variable, Number, BinOp, Assignment, VarAccess, ArrayAccess, IfStatement, WhileStatement
+from parser import (AST, Program, VarDecl, Assignment, IfStatement, WhileStatement, 
+                    FuncDecl, FuncCall, ReturnStatement, Block, ArrayAccess, BinOp, 
+                    Number, VarAccess)
 
 class CodeGenerator:
-    def __init__(self):
-        self.assembly_code = []
-        self.symbol_table = ScopedSymbolTable()
-        self.label_count = 0
+    def __init__(self) -> None:
+        self.assembly_code: list[str] = []
+        self.label_count: int = 0
+        self.symbol_table: ScopedSymbolTable | None = None
 
-    def new_label(self):
-        self.label_count += 1
-        return f"L{self.label_count}"
-
-    # ... visit_Program, visit_VarDecl などは前回とほぼ同じ ...
-    def generate(self, node):
+    def generate(self, node: AST, symbol_table: ScopedSymbolTable) -> str:
+        self.symbol_table = symbol_table
         self.visit(node)
         return "\n".join(self.assembly_code)
 
-    def visit(self, node):
+    def new_label(self) -> str:
+        self.label_count += 1
+        return f"L{self.label_count}"
+
+    def visit(self, node: AST) -> None:
         method_name = f'visit_{type(node).__name__}'
         visitor = getattr(self, method_name, self.generic_visit)
         return visitor(node)
 
-    def generic_visit(self, node):
-        raise NotImplementedError(f"No visit_{type(node).__name__} method for {type(node).__name__}")
+    def generic_visit(self, node: AST) -> None:
+        raise NotImplementedError(f"No visit_{type(node).__name__} method")
 
-    def visit_Program(self, node):
-        data_segment = []
-        code_segment = []
-        
-        # 1. まず全てのグローバル変数の領域を確保
-        for stmt in node.children:
-            if type(stmt).__name__ == 'VarDecl':
-                var_name = stmt.var_node.value
-                data_segment.append(f"{var_name}: .ds 2 ; int is 2 bytes")
-        
-        # 2. 次に実行コードを生成
-        for stmt in node.children:
-            # visitメソッドはコードを self.assembly_code に追加するので、一時的にリセット
-            self.assembly_code = []
-            self.visit(stmt)
-            code_segment.extend(self.assembly_code)
+    def visit_Program(self, node: Program) -> None:
+        data_segment = ["; --- Data Segment ---"]
+        assert self.symbol_table is not None
+        global_vars = self.symbol_table.scopes[0]
+        for name, symbol in global_vars.items():
+            if isinstance(symbol, VariableSymbol):
+                 size = symbol.size * 2 if symbol.is_array else 2
+                 data_segment.append(f"{name}: .ds {size}")
 
-        # 3. 最後に全体を結合
-        self.assembly_code = [".area CODE(ABS,CSEG)", ".org 0x100", "init:", "ld sp, 0xFFFE"]
-        self.assembly_code.append(";; --- Code Segment ---")
-        self.assembly_code.extend(code_segment)
-        self.assembly_code.extend(["halt", ".end init"])
+        # 3. コードセグメントの初期化
+        self.assembly_code.append("; --- Code Segment ---")
+        self.assembly_code.append(".area CODE(ABS,CSEG)")
+        self.assembly_code.append(".org 0x100")
+        self.assembly_code.append("init: ld sp, 0xFFFE")
+        self.assembly_code.append("\tcall main ; Jump to main function")
+        self.assembly_code.append("\thalt")
+        for child in node.children:
+            self.visit(child)
+        self.assembly_code.append(".end init")
+        # 4. データセグメントのコードを追加
         self.assembly_code.append(";; --- Data Segment ---")
         self.assembly_code.append(".area DATA(ABS,DSEG)")
         self.assembly_code.append(".org 0x8000")
@@ -59,6 +59,40 @@ class CodeGenerator:
             self.assembly_code.append(f"; Initialize {var_name}")
             self.visit(node.initial_value) # 式を評価 -> 結果がHLに
             self.assembly_code.append(f"\tld ({var_name}), hl")
+
+    def visit_FuncDecl(self, node):
+        func_name = node.name_token.value
+        self.assembly_code.append(f"; Function Definition: {func_name}")
+        self.assembly_code.append(f"{func_name}:")
+        
+        # --- プロローグ ---
+        self.assembly_code.append("\tpush ix")
+        self.assembly_code.append("\tld ix, 0")
+        self.assembly_code.append("\tadd ix, sp")
+        
+        # ... ローカル変数分のスタック確保 (sub sp, N) ...
+        
+        # --- 本体 ---
+        self.visit(node.body)
+        
+        # --- エピローグ ---
+        self.assembly_code.append(f".L_RET_{func_name}:") # return文からのジャンプ先
+        self.assembly_code.append("\tld sp, ix")
+        self.assembly_code.append("\tpop ix")
+        self.assembly_code.append("\tret")
+
+    def visit_FuncCall(self, node):
+        func_name = node.name.value
+        self.assembly_code.append(f"; Function Call: {func_name}")
+        # ... 引数をスタックに積む処理 ...
+        self.assembly_code.append(f"\tcall {func_name}")
+        # ... スタッククリーンアップ ...
+
+    def visit_ReturnStatement(self, node):
+        self.assembly_code.append("; Return statement")
+        self.visit(node.expr) # 戻り値をHLに計算
+        # ... 関数のエピローグへジャンプ ...
+
 
     def visit_ArrayAccess(self, node):
         # 値を読み出す場合

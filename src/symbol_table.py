@@ -1,40 +1,46 @@
-# --- symbol_table.py ---
+from __future__ import annotations
+from typing import Optional
 
 class Symbol:
-    def __init__(self, name, type):
-        self.name = name
-        self.type = type
+    """すべてのシンボルの基底クラス"""
+    def __init__(self, name: str, type: Optional['Type'] = None):
+        self.name: str = name
+        self.type: Optional['Type'] = type
 
 class VariableSymbol(Symbol):
-    def __init__(self, name, type, scope, offset=0, is_array=False, size=0):
+    """変数シンボル (グローバル/ローカル/引数)"""
+    def __init__(self, name: str, type: 'Type', scope: str, offset: int = 0, is_array: bool = False, size: int = 0):
         super().__init__(name, type)
-        self.scope = scope
-        self.offset = offset
-        self.is_array = is_array # 配列かどうか
-        self.size = size       # 配列の要素数
+        self.scope: str = scope
+        self.offset: int = offset
+        self.is_array: bool = is_array
+        self.size: int = size
 
 class FunctionSymbol(Symbol):
-    def __init__(self, name, return_type, params):
+    """関数シンボル"""
+    def __init__(self, name: str, return_type: 'Type', params: Optional[list['Param']] = None):
         super().__init__(name, return_type)
-        self.params = params
+        self.params: list['Param'] = params if params is not None else []
 
 class ScopedSymbolTable:
-    def __init__(self):
-        self.scopes = [{}] # Scope stack, global scope is at the bottom
-        self.scope_level = 0
+    """スコープを持つシンボルテーブル"""
+    def __init__(self) -> None:
+        self.scopes: list[dict[str, Symbol]] = [{}]
+        self.scope_level: int = 0
 
-    def enter_scope(self):
+    def enter_scope(self) -> None:
         self.scopes.append({})
         self.scope_level += 1
 
-    def leave_scope(self):
-        self.scopes.pop()
-        self.scope_level -= 1
+    def leave_scope(self) -> None:
+        if self.scope_level > 0:
+            self.scopes.pop()
+            self.scope_level -= 1
 
-    def define(self, symbol):
+    def define(self, symbol: Symbol) -> None:
         self.scopes[-1][symbol.name] = symbol
 
-    def lookup(self, name):
+    def lookup(self, name: str) -> Optional[Symbol]:
         for scope in reversed(self.scopes):
             if name in scope:
                 return scope[name]
