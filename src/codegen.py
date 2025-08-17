@@ -120,6 +120,7 @@ class CodeGenerator:
             var_name = node.left.value
             assert self.symbol_table is not None
             symbol = self.symbol_table.lookup(var_name)
+            print(f"; Assigning to variable {var_name}")
             
             self.assembly_code.append(f"; Assign to {var_name} ({symbol.type.value})")
             # 型に応じてストア方法を変更
