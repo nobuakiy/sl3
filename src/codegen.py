@@ -2,7 +2,8 @@ from __future__ import annotations
 from symbol_table import ScopedSymbolTable, VariableSymbol, Symbol
 from parser import (AST, Program, VarDecl, Assignment, IfStatement, WhileStatement,
                     FuncDecl, FuncCall, ReturnStatement, Block, ArrayAccess, BinOp,
-                    Number, VarAccess, MemAccess, UnaryOp, StringLiteral, ForInStatement)
+                    Number, VarAccess, MemAccess, UnaryOp, StringLiteral, ForInStatement,
+                    BitAccess)
 
 class CodeGenerator:
     def __init__(self) -> None:
@@ -312,72 +313,125 @@ class CodeGenerator:
                 self.assembly_code.append(f"\tld h, 0")
                 self.assembly_code.append(f"\tld l, a")
 
+    def visit_BitAccess(self, node: BitAccess) -> None:
+        """ビットを読み出し(テストし)、結果(0か1)をHLに格納する"""
+        self._emit_source_comment(node)
+        var_name = node.var_node.value
+        bit_num = node.bit_num_token.value
+        symbol = self.symbol_table.lookup(var_name)
+
+        self.assembly_code.append(f"; Test bit {bit_num} of '{var_name}'")
+        # 変数の下位バイトをAレジスタにロード
+        if symbol.scope == 'global':
+            self.assembly_code.append(f"\tld a, ({var_name})")
+        else: # local
+            self.assembly_code.append(f"\tld a, (ix{symbol.offset:+})")
+
+        # BIT命令でテスト
+        self.assembly_code.append(f"\tbit {bit_num}, a")
+        # 結果(Zフラグ)を数値に変換してHLに入れる
+        self.assembly_code.append("\tld hl, 0")
+        self.assembly_code.append("\tjp z, .L_BIT_ZERO{self.label_count}") # Zフラグがセット(ビットが0)ならジャンプ
+        self.assembly_code.append("\tld hl, 1")
+        self.assembly_code.append(f".L_BIT_ZERO{self.label_count}:")
+        self.label_count += 1
+
     def visit_Assignment(self, node: Assignment) -> None:
         self._emit_source_comment(node)  # ソースコードの行をコメントとして出力
 
-        if isinstance(node.left, MemAccess):
-            # MEM[addr] = value の場合
-            # 1. 右辺の値を評価 -> HL
-            self.visit(node.right)
-            self.assembly_code.append("\tpush hl")
-            # 2. 左辺のアドレス式を評価 -> HL
-            self.visit(node.left.address_expr)
-            self.assembly_code.append("\tpop de     ; Value to store in DE")
-            # 3. DEの値をHLが指すアドレスにストア
-            self.assembly_code.append("\tld (hl), e")
-            self.assembly_code.append("\tinc hl")
-            self.assembly_code.append("\tld (hl), d")
-        # ... (他の代入処理)
-
-        # 1. 右辺の式を評価 -> 結果はHLに入る
-        self.visit(node.right)
-
-        # 2. 左辺の変数を特定
-        left_node = node.left
-        if isinstance(left_node, VarAccess):
-            var_name = left_node.value
-            assert self.symbol_table is not None
+        if isinstance(node.left, BitAccess):
+            # --- ビットへの代入 ---
+            var_name = node.left.var_node.value
+            bit_num = node.left.bit_num_token.value
             symbol = self.symbol_table.lookup(var_name)
-            if not symbol or not isinstance(symbol, VariableSymbol):
-                self._error(f"Assignment to undeclared variable '{var_name}'", left_node.token)
 
-            self.assembly_code.append(f"; Assign to {var_name} ({symbol.scope})")
+            self.assembly_code.append(f"; Assign to bit {bit_num} of '{var_name}'")
+            # 右辺の値(0か1)を評価
+            # (簡単のため、ここではリテラル0か1のみをサポート)
+            value = node.right.value
 
+            # 変数の下位バイトをAレジスタにロード
             if symbol.scope == 'global':
-                if self.get_symbol_size(symbol) == 2:
-                    self.assembly_code.append(f"\tld ({var_name}), hl")
-                else:
-                    self.assembly_code.append("\tld a, l")
-                    self.assembly_code.append(f"\tld ({var_name}), a")
+                self.assembly_code.append(f"\tld a, ({var_name})")
             else: # local
-                # --- ★ ここからが新しい高速なロジック ---
-                offset = symbol.offset
-                self.assembly_code.append(f"; Store to local var at (ix{offset:+})")
-                if self.get_symbol_size(symbol) == 2: # int
-                    self.assembly_code.append(f"\tld (ix{offset:+}), l   ; Store low byte")
-                    self.assembly_code.append(f"\tld (ix{offset+1:+}), h ; Store high byte")
-                else: # byte
-                    self.assembly_code.append("\tld a, l")
-                    self.assembly_code.append(f"\tld (ix{offset:+}), a")
+                self.assembly_code.append(f"\tld a, (ix{symbol.offset:+})")
 
-        # 配列への代入
-        elif isinstance(node.left, ArrayAccess):
-            self.assembly_code.append("; Assignment to array element")
-            # 1. 右辺の値を評価 -> HL
-            self.visit(node.right)
-            self.assembly_code.append("\tpush hl")
-            # 2. 左辺の要素アドレスを計算 -> HL
-            self._get_element_address_in_hl(node.left)
-            # 3. 退避した値をDEに復元
-            self.assembly_code.append("\tpop de")
-            # 4. DEの値をHLが指すアドレスにストア
-            symbol = self.symbol_table.lookup(node.left.var_node.value)
-            if self.get_symbol_size(symbol) == 2: # int
+            # SETまたはRES命令
+            if value == 1:
+                self.assembly_code.append(f"\tset {bit_num}, a")
+            else:
+                self.assembly_code.append(f"\tres {bit_num}, a")
+
+            # 結果をメモリに書き戻す
+            if symbol.scope == 'global':
+                self.assembly_code.append(f"\tld ({var_name}), a")
+            else: # local
+                self.assembly_code.append(f"\tld (ix{symbol.offset:+}), a")
+
+        else:
+            if isinstance(node.left, MemAccess):
+                # MEM[addr] = value の場合
+                # 1. 右辺の値を評価 -> HL
+                self.visit(node.right)
+                self.assembly_code.append("\tpush hl")
+                # 2. 左辺のアドレス式を評価 -> HL
+                self.visit(node.left.address_expr)
+                self.assembly_code.append("\tpop de     ; Value to store in DE")
+                # 3. DEの値をHLが指すアドレスにストア
                 self.assembly_code.append("\tld (hl), e")
                 self.assembly_code.append("\tinc hl")
                 self.assembly_code.append("\tld (hl), d")
-            else: # byte
-                self.assembly_code.append("\tld (hl), e ; Note: storing low byte of DE")
+            # ... (他の代入処理)
+
+            # 1. 右辺の式を評価 -> 結果はHLに入る
+            self.visit(node.right)
+
+            # 2. 左辺の変数を特定
+            left_node = node.left
+            if isinstance(left_node, VarAccess):
+                var_name = left_node.value
+                assert self.symbol_table is not None
+                symbol = self.symbol_table.lookup(var_name)
+                if not symbol or not isinstance(symbol, VariableSymbol):
+                    self._error(f"Assignment to undeclared variable '{var_name}'", left_node.token)
+
+                self.assembly_code.append(f"; Assign to {var_name} ({symbol.scope})")
+
+                if symbol.scope == 'global':
+                    if self.get_symbol_size(symbol) == 2:
+                        self.assembly_code.append(f"\tld ({var_name}), hl")
+                    else:
+                        self.assembly_code.append("\tld a, l")
+                        self.assembly_code.append(f"\tld ({var_name}), a")
+                else: # local
+                    # --- ★ ここからが新しい高速なロジック ---
+                    offset = symbol.offset
+                    self.assembly_code.append(f"; Store to local var at (ix{offset:+})")
+                    if self.get_symbol_size(symbol) == 2: # int
+                        self.assembly_code.append(f"\tld (ix{offset:+}), l   ; Store low byte")
+                        self.assembly_code.append(f"\tld (ix{offset+1:+}), h ; Store high byte")
+                    else: # byte
+                        self.assembly_code.append("\tld a, l")
+                        self.assembly_code.append(f"\tld (ix{offset:+}), a")
+
+            # 配列への代入
+            elif isinstance(node.left, ArrayAccess):
+                self.assembly_code.append("; Assignment to array element")
+                # 1. 右辺の値を評価 -> HL
+                self.visit(node.right)
+                self.assembly_code.append("\tpush hl")
+                # 2. 左辺の要素アドレスを計算 -> HL
+                self._get_element_address_in_hl(node.left)
+                # 3. 退避した値をDEに復元
+                self.assembly_code.append("\tpop de")
+                # 4. DEの値をHLが指すアドレスにストア
+                symbol = self.symbol_table.lookup(node.left.var_node.value)
+                if self.get_symbol_size(symbol) == 2: # int
+                    self.assembly_code.append("\tld (hl), e")
+                    self.assembly_code.append("\tinc hl")
+                    self.assembly_code.append("\tld (hl), d")
+                else: # byte
+                    self.assembly_code.append("\tld (hl), e ; Note: storing low byte of DE")
 
 
     def visit_Block(self, node):

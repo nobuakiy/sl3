@@ -26,8 +26,8 @@ class Lexer:
             ('ELSE',       r'\belse\b'),
             ('WHILE',      r'\bwhile\b'),
             ('RETURN',     r'\breturn\b'),
-            ('FOR',        r'\bfor\b'), 
-            ('IN',         r'\bin\b'), 
+            ('FOR',        r'\bfor\b'),
+            ('IN',         r'\bin\b'),
             ('DO',         r'\bdo\b'),
             ('MEM',        r'\bMEM\b'), # MEMキーワードを追加
             ('STRINGBUFFER', r'\bStringBuffer\b'),
@@ -37,7 +37,8 @@ class Lexer:
             ('EQ', r'=='), ('NE', r'!='), ('LE', r'<='), ('GE', r'>='),
             ('LPAREN', r'\('), ('RPAREN', r'\)'), ('LBRACKET', r'\['),
             ('RBRACKET', r'\]'), ('LBRACE', r'\{'), ('RBRACE', r'\}'),
-            ('COMMA', r','), ('PLUS', r'\+'), ('MINUS', r'-'),
+            ('COMMA', r','), ('DOT', r'\.'),
+            ('PLUS', r'\+'), ('MINUS', r'-'),
             ('MUL', r'\*'), ('DIV', r'/'), ('ASSIGN', r'='),
             ('LT', r'<'), ('GT', r'>'),
             ('AMPERSAND',  r'&'), # ★ この行を追加しました
@@ -70,5 +71,5 @@ class Lexer:
                 continue
             elif kind == 'MISMATCH':
                 raise RuntimeError(f'{value!r} unexpected on line {line_num}')
-            
+
             yield Token(kind, value, line_num, column)

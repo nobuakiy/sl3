@@ -54,6 +54,10 @@ class ForInStatement(AST):
         self.array_node = array_node
         self.body = body
         self.local_symbols: dict[str, Symbol] = {} # ループ変数用のスコープ
+class BitAccess(AST):
+    def __init__(self, var_node: VarAccess, bit_num_token: Token):
+        self.var_node = var_node
+        self.bit_num_token = bit_num_token
 
 # --- Parser ---
 class Parser:
@@ -65,7 +69,11 @@ class Parser:
         self.source_lines: list[str] = source_code.splitlines()
         self.advance(); self.advance()
         self.symbol_table: ScopedSymbolTable = ScopedSymbolTable()
-        self.precedence: dict[str, int] = {'EQ': 3, 'NE': 3, 'LT': 4, 'GT': 4, 'LE': 4, 'GE': 4, 'PLUS': 5, 'MINUS': 5, 'MUL': 6, 'DIV': 6}
+        self.precedence: dict[str, int] = {
+            'EQ': 3, 'NE': 3, 'LT': 4, 'GT': 4, 'LE': 4, 'GE': 4,
+            'PLUS': 5, 'MINUS': 5, 'MUL': 6, 'DIV': 6
+        }
+
     def _error(self, message: str, token: Optional[Token] = None) -> NoReturn:
         token = token or self.current_token
         err_line, pointer, line_info = "<source not available>", "", ""
@@ -77,17 +85,20 @@ class Parser:
                 pointer = " " * col_num + "^"
         full_message = (f"\n\n--- Compilation Error ---\nSyntax Error {line_info}:\n{message}\n\n> {err_line}\n  {pointer}\n")
         raise SyntaxError(full_message)
+
     def advance(self) -> None:
         self.current_token = self.peek_token
-        try: self.peek_token = next(self.tokens)
-        except StopIteration: self.peek_token = None
-    def eat(self, token_type: str) -> None:
-        if self.current_token and self.current_token.type == token_type: self.advance()
-        else:
-            expected_type = self.current_token.type if self.current_token else 'EOF'
-            self._error(f"Expected token '{token_type}', but got '{expected_type}'")
+        try:
+            self.peek_token = next(self.tokens)
+        except StopIteration:
+            self.peek_token = None
 
-    # --- ここからロジックを修正 ---
+    def eat(self, token_type: str) -> None:
+        if self.current_token and self.current_token.type == token_type:
+            self.advance()
+        else:
+            got_type = self.current_token.type if self.current_token else 'EOF'
+            self._error(f"Expected token '{token_type}', but got '{got_type}'")
 
     def parse(self) -> Program:
         declarations: list[AST] = []
@@ -236,26 +247,36 @@ class Parser:
 
         elif self.current_token.type == 'ID':
             name_token = self.current_token
-            # 関数呼び出しかどうかを先読み
+            # 関数呼び出し
             if self.peek_token and self.peek_token.type == 'LPAREN':
                 call_node = self.parse_function_call()
                 self.eat('SEMICOLON')
                 return call_node
 
             # 代入文の解析
-            # ★ const変数への代入をチェック
-            left_node_token = self.current_token
-            self.eat('ID')
-            left_node = VarAccess(left_node_token)
+            # ★ 左辺がビットアクセスの場合を処理
+            if self.peek_token and self.peek_token.type == 'DOT':
+                var_node = VarAccess(self.current_token)
+                self.advance()
+                self.eat('DOT')
+                bit_num_token = self.current_token
+                self.advance()
+                left_node = BitAccess(var_node, bit_num_token)
 
-            symbol = self.symbol_table.lookup(left_node_token.value)
-            if symbol and isinstance(symbol, VariableSymbol) and symbol.is_const:
-                self._error(f"Cannot assign to constant variable '{left_node_token.value}'", left_node_token)
+            else:
+                # ★ const変数への代入をチェック
+                left_node_token = self.current_token
+                self.eat('ID')
+                left_node = VarAccess(left_node_token)
 
-            # 配列アクセスのチェック
-            if self.current_token and self.current_token.type == 'LBRACKET':
-                self.eat('LBRACKET'); index_expr = self.parse_expression(); self.eat('RBRACKET')
-                left_node = ArrayAccess(left_node, index_expr)
+                symbol = self.symbol_table.lookup(left_node_token.value)
+                if symbol and isinstance(symbol, VariableSymbol) and symbol.is_const:
+                    self._error(f"Cannot assign to constant variable '{left_node_token.value}'", left_node_token)
+
+                # 配列アクセスのチェック
+                if self.current_token and self.current_token.type == 'LBRACKET':
+                    self.eat('LBRACKET'); index_expr = self.parse_expression(); self.eat('RBRACKET')
+                    left_node = ArrayAccess(left_node, index_expr)
 
         self.eat('ASSIGN');
         right_node: AST = self.parse_expression()
@@ -353,17 +374,33 @@ class Parser:
             return Number(token)
         if token.type == 'ID':
             name_token = token
-            if self.peek_token and self.peek_token.type == 'LPAREN': return self.parse_function_call()
             self.advance()
+
+            # bitアクセスのチェック
+            if self.current_token and self.current_token.type == 'DOT':
+                self.eat('DOT')
+                bit_num_token = self.current_token
+                self.eat('INTEGER')
+                return BitAccess(VarAccess(name_token), bit_num_token)
+
+            # 関数呼び出し
+            if self.peek_token and self.peek_token.type == 'LPAREN':
+                return self.parse_function_call()
+
+            # 配列アクセス
             if self.current_token and self.current_token.type == 'LBRACKET':
                 self.eat('LBRACKET'); index_expr = self.parse_expression(); self.eat('RBRACKET')
                 return ArrayAccess(VarAccess(name_token), index_expr)
+
+            # 普通の変数アクセス
             return VarAccess(name_token)
+
         if token.type == 'MEM':
             self.eat('MEM'); self.eat('LBRACKET')
             addr_expr = self.parse_expression()
             self.eat('RBRACKET')
             return MemAccess(addr_expr)
+
         self._error(f"Unexpected token in expression: {token}")
 
     def parse_function_call(self) -> FuncCall:
