@@ -56,3 +56,60 @@ SB_LENGTH:
     inc hl
     ld a, (hl)
     ret
+
+; runtime.asm - Multiplication and Division Library
+
+; --- MUL16 ---
+; 16bit x 16bit Unsigned Multiplication
+; Input:
+;   HL: Multiplicand
+;   DE: Multiplier
+; Output:
+;   DEHL: 32bit Result (DE=high, HL=low)
+; Destroys: AF, BC
+MUL16:
+    ld b, 16
+    ld a, d
+    ld c, e
+    ld de, 0
+.mul_loop:
+    srl a         ; Multiplier bit check
+    rrc c
+    jr nc, .no_add
+    add hl, de    ; Add multiplicand to result
+.no_add:
+    ex de, hl     ; DE is now result, HL is multiplicand
+    add hl, hl    ; Shift multiplicand left
+    ex de, hl     ; Restore
+    djnz .mul_loop
+    ex de, hl     ; Final result in DEHL
+    ret
+
+; --- DIV16 ---
+; 16bit / 16bit Unsigned Division
+; Input:
+;   HL: Dividend
+;   DE: Divisor
+; Output:
+;   HL: Quotient
+;   DE: Remainder
+; Destroys: AF, BC
+DIV16:
+    ld b, 16
+    ld bc, 0      ; Quotient
+.div_loop:
+    add hl, hl    ; Shift dividend left
+    rl c
+    rl b
+    sbc hl, de    ; Subtract divisor
+    jr nc, .no_sub
+    add hl, de    ; Restore if borrow
+    res 0, c      ; Clear quotient bit
+.no_sub:
+    djnz .div_loop
+    ex de, hl     ; Remainder in DE
+    ld h, b
+    ld l, c       ; Quotient in HL
+    ret
+; --- END OF FILE ---
+; vim: set ts=4 sw=4 et:

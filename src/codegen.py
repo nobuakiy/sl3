@@ -144,6 +144,9 @@ class CodeGenerator:
         self.assembly_code.append("\tcall main")
         self.assembly_code.append("\thalt")
 
+        self.assembly_code.append("\n; --- include runtime ---")
+        self.assembly_code.append("\t.include /src\\runtime.asm/")
+
         self.assembly_code.append("\n; --- Functions ---")
         for func_decl_node in func_decls:
             self.visit(func_decl_node)
@@ -515,43 +518,38 @@ class CodeGenerator:
         self.assembly_code.append(f"; Load number {node.value}")
         self.assembly_code.append(f"\tld hl, {node.value}")
 
-    def visit_BinOp(self, node):
-        op_type = node.op.type
-        self.assembly_code.append(f"; Begin BinOp {op_type}")
+# (codegen.py内のvisit_BinOpメソッドを修正)
 
-        # 1. 右辺 (RHS) を評価し、結果をスタックに退避
+    def visit_BinOp(self, node: BinOp) -> None:
+        op_type = node.op.type
+
+        # 共通の評価ロジック
+        self._emit_source_comment(node)
+        self.assembly_code.append(f"; Begin BinOp {op_type}")
         self.visit(node.right)
         self.assembly_code.append("\tpush hl")
-
-        # 2. 左辺 (LHS) を評価 (結果はHLに残る)
         self.visit(node.left)
-
-        # 3. 退避した右辺の値をDEレジスタに復元
         self.assembly_code.append("\tpop de")
 
-        # 比較演算子の処理を追加
-        if op_type in ('EQ', 'NE', 'LT', 'GT', 'LE', 'GE'):
-            self.assembly_code.append(f"; Begin CompareOp {op_type}")
-            self.visit(node.right)
-            self.assembly_code.append("\tpush hl")
-            self.visit(node.left)
-            self.assembly_code.append("\tpop de")
-            self.assembly_code.append("\tand a      ; Clear carry flag for subtraction")
-            self.assembly_code.append("\tsbc hl, de ; Compare HL and DE (HL - DE)")
-            # この結果、ZフラグとCフラグがセットされる
-        # 4. 演算を実行 (結果はHLに格納)
-        elif op_type == 'PLUS':
-            self.assembly_code.append("\tadd hl, de ; HL = HL + DE")
+        # 演算子に応じたコード生成
+        if op_type == 'PLUS':
+            self.assembly_code.append("\tadd hl, de")
         elif op_type == 'MINUS':
-            # Z80には16bit減算がないので `SBC` を使う
-            self.assembly_code.append("\tand a ; Clear carry flag")
-            self.assembly_code.append("\tsbc hl, de ; HL = HL - DE")
+            self.assembly_code.append("\tand a ; Clear carry")
+            self.assembly_code.append("\tsbc hl, de")
         elif op_type == 'MUL':
-            # 乗算は複雑なので、ここでは単純な加算で代用 (本来はサブルーチンを呼ぶ)
-            self.assembly_code.append("; Multiplication (placeholder)")
-            self.assembly_code.append("\t; TODO: Implement multiplication routine")
+            # ★ 乗算サブルーチンを呼び出す
+            self.assembly_code.append("\tcall MUL16")
+            # 32bit結果の上位(DE)は無視し、下位(HL)を結果とする
+        elif op_type == 'DIV':
+            # ★ 除算サブルーチンを呼び出す
+            self.assembly_code.append("\tcall DIV16")
+            # 商がHLに、余りがDEに残る。結果は商(HL)とする
+        elif op_type in ('EQ', 'NE', 'LT', 'GT', 'LE', 'GE'):
+            self.assembly_code.append("\tand a")
+            self.assembly_code.append("\tsbc hl, de ; For comparison")
         else:
-            raise NotImplementedError(f"Operator {op_type} not implemented")
+            self._error(f"Unsupported binary operator '{op_type}'", node.op)
 
         self.assembly_code.append(f"; End BinOp {op_type}")
 
