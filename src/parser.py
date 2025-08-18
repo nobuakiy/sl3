@@ -63,6 +63,10 @@ class MethodCall(AST):
         self.var_node = var_node
         self.method_token = method_token
         self.args = args
+class PortAccess(AST):
+    def __init__(self, address_expr: AST, token: Token):
+        self.address_expr: AST = address_expr
+        self.token: Token = token # エラー報告用にトークンを保持
 
 # --- Parser ---
 class Parser:
@@ -266,7 +270,7 @@ class Parser:
         if is_const: # constの後ろに型名がなければエラー
             self._error("Expected a type specifier after 'const'")
 
-        if tok_type == 'ID' or tok_type == 'MEM':
+        if tok_type == 'ID' or tok_type == 'MEM' or tok_type == 'PORT':
             return self.parse_assignment_or_call_statement()
 
         if tok_type == 'FOR':
@@ -278,47 +282,75 @@ class Parser:
         if tok_type == 'LBRACE': return self.parse_block_statement()
         self._error(f"Invalid statement starting with '{tok_type}'")
 
+
     def parse_assignment_or_call_statement(self) -> AST:
-        # MEMで始まる文は代入しかありえない
-        if self.current_token and self.current_token.type == 'MEM':
+        left_node: AST
+
+        # --- 左辺 (lvalue) の解析 ---
+        if self.current_token and self.current_token.type == 'ID':
+            name_token = self.current_token
+            self.eat('ID')
+            left_node = VarAccess(name_token)
+        elif self.current_token and self.current_token.type == 'MEM':
+            mem_token = self.current_token
             self.eat('MEM'); self.eat('LBRACKET')
             addr_expr = self.parse_expression(); self.eat('RBRACKET')
-            left_node = MemAccess(addr_expr)
-            self.eat('ASSIGN'); right_node = self.parse_expression(); self.eat('SEMICOLON')
-            return Assignment(left_node, right_node)
-
-        # IDで始まる文の解析
-        if not self.current_token or self.current_token.type != 'ID':
-             self._error("Internal parser error: expected an identifier.")
-
-        name_token = self.current_token
-
-        # IDの次のトークンを先読みして分岐
-        if self.peek_token and self.peek_token.type == 'DOT':
-            # --- メソッド呼び出し文 (sb.append(...);) ---
-            self.eat('ID') # sb
-            self.eat('DOT')
-            method_token = self.current_token
-            self.eat('ID') # append
-            self.eat('LPAREN')
-            args: list[AST] = []
-            if self.current_token and self.current_token.type != 'RPAREN':
-                args.append(self.parse_expression())
-                while self.current_token and self.current_token.type == 'COMMA':
-                    self.eat('COMMA'); args.append(self.parse_expression())
-            self.eat('RPAREN')
-            self.eat('SEMICOLON')
-            return MethodCall(VarAccess(name_token), method_token, args)
+            left_node = MemAccess(addr_expr, mem_token)
+        elif self.current_token and self.current_token.type == 'PORT':
+            port_token = self.current_token
+            self.eat('PORT'); self.eat('LBRACKET')
+            addr_expr = self.parse_expression(); self.eat('RBRACKET')
+            left_node = PortAccess(addr_expr, port_token)
         else:
-            # --- 変数または配列への代入文 (x = ...; or x[...] = ...;) ---
-            self.eat('ID')
-            left_node: AST = VarAccess(name_token)
-            if self.current_token and self.current_token.type == 'LBRACKET':
+            self._error("Invalid start of a statement. Expected an identifier, MEM, or PORT.")
+
+        # --- 2. 左辺がさらに続くかチェック (. や [ があるか) ---
+        is_method_call = False
+        while self.current_token:
+            if self.current_token.type == 'LBRACKET': # 配列アクセス: x[...]
                 self.eat('LBRACKET'); index_expr = self.parse_expression(); self.eat('RBRACKET')
                 left_node = ArrayAccess(left_node, index_expr)
 
-            self.eat('ASSIGN'); right_node = self.parse_expression(); self.eat('SEMICOLON')
+            elif self.current_token.type == 'DOT': # ビット or メソッド: x.y
+                self.eat('DOT')
+                member_token = self.current_token
+
+                if self.peek_token and self.peek_token.type == 'LPAREN':
+                    # --- ★ ここからがメソッド呼び出しの解析ロジック ---
+                    self.eat('ID') # メソッド名を消費
+                    self.eat('LPAREN')
+                    args: list[AST] = []
+                    if self.current_token and self.current_token.type != 'RPAREN':
+                        args.append(self.parse_expression())
+                        while self.current_token and self.current_token.type == 'COMMA':
+                            self.eat('COMMA'); args.append(self.parse_expression())
+                    self.eat('RPAREN')
+                    left_node = MethodCall(left_node, member_token, args)
+                    is_method_call = True # メソッド呼び出しだったことを記録
+                    break # メソッド呼び出しは左辺の最後
+                else:
+                    # --- ビットアクセス ---
+                    bit_num_val = self._parse_const_integer()
+                    bit_num_token = Token('INTEGER', bit_num_val)
+                    left_node = BitAccess(left_node, bit_num_token)
+            else:
+                break # 左辺の解析終了
+
+        # --- 3. 代入文か、メソッド呼び出し文かを判断 ---
+        if self.current_token and self.current_token.type == 'ASSIGN':
+            if is_method_call:
+                self._error("Cannot assign to the result of a method call.", left_node.method_token)
+            # 代入文の解析
+            self.eat('ASSIGN')
+            right_node = self.parse_expression()
+            self.eat('SEMICOLON')
             return Assignment(left_node, right_node)
+        elif is_method_call:
+            # メソッド呼び出し文の解析
+            self.eat('SEMICOLON')
+            return left_node
+        else:
+            self._error("Expected an assignment operator '=' or a method call after the expression.")
 
     def parse_block_statement(self) -> Block:
         self.eat('LBRACE')
@@ -402,13 +434,28 @@ class Parser:
         token = self.current_token
         if not token:
             self._error("Unexpected end of expression")
+
         # ★ STRINGトークンの解析を追加
         if token.type == 'STRING':
             self.advance()
             return StringLiteral(token)
+
         if token.type == 'INTEGER':
             self.advance();
             return Number(token)
+
+        if token.type == 'MEM':
+            self.eat('MEM'); self.eat('LBRACKET')
+            addr_expr = self.parse_expression()
+            self.eat('RBRACKET')
+            return MemAccess(addr_expr)
+
+        if token.type == 'PORT':
+            self.eat('PORT'); self.eat('LBRACKET')
+            addr_expr = self.parse_expression()
+            self.eat('RBRACKET')
+            return PortAccess(addr_expr, token)
+
         if token.type == 'ID':
             name_token = token
             self.advance()
@@ -450,12 +497,6 @@ class Parser:
 
             # 普通の変数アクセス
             return VarAccess(name_token)
-
-        if token.type == 'MEM':
-            self.eat('MEM'); self.eat('LBRACKET')
-            addr_expr = self.parse_expression()
-            self.eat('RBRACKET')
-            return MemAccess(addr_expr)
 
         self._error(f"Unexpected token in expression: {token}")
 

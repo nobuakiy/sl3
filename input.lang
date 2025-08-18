@@ -1,9 +1,7 @@
-int main() {
-    int x = 100;
-    int y = 25;
-    int z;
+const int CTRL_PORT = 10;
+const int ENABLE_BIT = 3;
 
-    z = x * y; // z = 2500
-    z = z / 10; // z = 250
-    return z;
+int main() {
+    // ポート10のビット3を立てる
+    PORT[CTRL_PORT].ENABLE_BIT = 1;
 }

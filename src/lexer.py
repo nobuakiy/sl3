@@ -30,6 +30,7 @@ class Lexer:
             ('IN',         r'\bin\b'),
             ('DO',         r'\bdo\b'),
             ('MEM',        r'\bMEM\b'), # MEMキーワードを追加
+            ('PORT',       r'\bPORT\b'), # PORTキーワードを追加
             ('STRINGBUFFER', r'\bStringBuffer\b'),
             ('ID',         r'[a-zA-Z_][a-zA-Z0-9_]*'),
             ('INTEGER',    r'0x[0-9a-fA-F]+|[0-9]+'),

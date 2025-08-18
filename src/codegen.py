@@ -3,7 +3,7 @@ from symbol_table import ScopedSymbolTable, VariableSymbol, Symbol
 from parser import (AST, Program, VarDecl, Assignment, IfStatement, WhileStatement,
                     FuncDecl, FuncCall, ReturnStatement, Block, ArrayAccess, BinOp,
                     Number, VarAccess, MemAccess, UnaryOp, StringLiteral, ForInStatement,
-                    BitAccess, MethodCall)
+                    BitAccess, MethodCall, PortAccess)
 
 class CodeGenerator:
     def __init__(self) -> None:
@@ -339,10 +339,45 @@ class CodeGenerator:
         self.assembly_code.append(f".L_BIT_ZERO{self.label_count}:")
         self.label_count += 1
 
-    def visit_Assignment(self, node: Assignment) -> None:
-        self._emit_source_comment(node)  # ソースコードの行をコメントとして出力
+    def visit_PortAccess(self, node: PortAccess) -> None:
+        """ポートから1バイト読み出し、結果をHLに格納する"""
+        self._emit_source_comment(node)
+        # 簡単のため、アドレスはコンパイル時定数と仮定
+        port_addr = node.address_expr.value
+        self.assembly_code.append(f"; Read from PORT[{port_addr}]")
+        self.assembly_code.append(f"\tin a, ({port_addr})")
+        self.assembly_code.append("\tld h, 0")
+        self.assembly_code.append("\tld l, a ; Promote byte to int in HL")
 
-        if isinstance(node.left, BitAccess):
+    def visit_Assignment(self, node: Assignment) -> None:
+        self._emit_source_comment(node)
+
+        if isinstance(node.left, PortAccess):
+            # --- ポートへの代入: PORT[addr] = value ---
+            port_addr = node.left.address_expr.value
+            self.visit(node.right) # 右辺を評価 -> HL
+            self.assembly_code.append(f"; Write to PORT[{port_addr}]")
+            self.assembly_code.append("\tld a, l ; Truncate to 8-bit")
+            self.assembly_code.append(f"\tout ({port_addr}), a")
+
+        elif isinstance(node.left, BitAccess) and isinstance(node.left.var_node, PortAccess):
+            # --- ポートのビットへの代入: PORT[addr].bit = value ---
+            port_addr = node.left.var_node.address_expr.value
+            bit_num = node.left.bit_num_token.value
+            value = node.right.value
+
+            self.assembly_code.append(f"; Read-Modify-Write to PORT[{port_addr}].{bit_num}")
+            # 1. Read
+            self.assembly_code.append(f"\tin a, ({port_addr})")
+            # 2. Modify
+            if value == 1:
+                self.assembly_code.append(f"\tset {bit_num}, a")
+            else:
+                self.assembly_code.append(f"\tres {bit_num}, a")
+            # 3. Write
+            self.assembly_code.append(f"\tout ({port_addr}), a")
+
+        elif isinstance(node.left, BitAccess):
             # --- ビットへの代入 ---
             var_name = node.left.var_node.value
             bit_num = node.left.bit_num_token.value
@@ -435,7 +470,6 @@ class CodeGenerator:
                     self.assembly_code.append("\tld (hl), d")
                 else: # byte
                     self.assembly_code.append("\tld (hl), e ; Note: storing low byte of DE")
-
 
     def visit_Block(self, node):
         for stmt in node.statements:
