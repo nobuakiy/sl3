@@ -2,7 +2,7 @@ from __future__ import annotations
 from symbol_table import ScopedSymbolTable, VariableSymbol, Symbol
 from parser import (AST, Program, VarDecl, Assignment, IfStatement, WhileStatement,
                     FuncDecl, FuncCall, ReturnStatement, Block, ArrayAccess, BinOp,
-                    Number, VarAccess, MemAccess, UnaryOp, StringLiteral)
+                    Number, VarAccess, MemAccess, UnaryOp, StringLiteral, ForInStatement)
 
 class CodeGenerator:
     def __init__(self) -> None:
@@ -65,6 +65,36 @@ class CodeGenerator:
             if symbol.type.value == 'int': return 2
             if symbol.type.value == 'byte': return 1
         return 2 # 不明な場合はデフォルトでint
+
+    def _get_element_address_in_hl(self, node: ArrayAccess) -> None:
+        """配列要素の最終的なメモリアドレスを計算し、HLレジスタに格納する"""
+        var_name = node.var_node.value
+        symbol = self.symbol_table.lookup(var_name)
+
+        if not symbol or not isinstance(symbol, VariableSymbol) or not symbol.is_array:
+            self._error(f"'{var_name}' is not a valid array", node.var_node.token)
+
+        self.assembly_code.append(f"; Calculate address for {var_name}[i]")
+
+        # 1. インデックス値を評価し、要素サイズを乗算 -> 結果はHL
+        self.visit(node.index_expr)
+        if self.get_symbol_size(symbol) == 2: # int
+            self.assembly_code.append("\tadd hl, hl ; index *= 2")
+
+        # 2. 配列のベースアドレスを計算し、インデックスオフセットと加算
+        if symbol.scope == 'global':
+            self.assembly_code.append(f"\tld de, {var_name} ; Load global array base address")
+            self.assembly_code.append("\tadd hl, de")
+        else: # local
+            # HL = (IX + base_offset) + (scaled_index)
+            # まず IX を DE にコピー
+            self.assembly_code.append("\tpush ix")
+            self.assembly_code.append("\tpop de")
+            # HL (scaled_index) と DE (IX) を加算
+            self.assembly_code.append("\tadd hl, de")
+            # 最後に配列のベースオフセットを加算
+            self.assembly_code.append(f"\tld de, {symbol.offset}")
+            self.assembly_code.append("\tadd hl, de")
 
     def visit(self, node: AST) -> None:
         method_name = f'visit_{type(node).__name__}'
@@ -233,16 +263,23 @@ class CodeGenerator:
         # ... 関数のエピローグへジャンプ ...
 
 
-    def visit_ArrayAccess(self, node):
-        # 値を読み出す場合
+    def visit_ArrayAccess(self, node: ArrayAccess) -> None:
+        self._emit_source_comment(node)
         # 1. 要素のアドレスをHLに計算
-        self.get_element_address_in_hl(node)
+        self._get_element_address_in_hl(node)
 
         # 2. HLが指すアドレスから値をロード
-        self.assembly_code.append("\tld e, (hl)   ; Load low byte")
-        self.assembly_code.append("\tinc hl")
-        self.assembly_code.append("\tld d, (hl)   ; Load high byte")
-        self.assembly_code.append("\tex de, hl    ; Result in HL")
+        symbol = self.symbol_table.lookup(node.var_node.value)
+        self.assembly_code.append("; Load value from calculated address")
+        if self.get_symbol_size(symbol) == 2: # int
+            self.assembly_code.append("\tld e, (hl)")
+            self.assembly_code.append("\tinc hl")
+            self.assembly_code.append("\tld d, (hl)")
+            self.assembly_code.append("\tex de, hl")
+        else: # byte
+            self.assembly_code.append("\tld a, (hl)")
+            self.assembly_code.append("\tld h, 0")
+            self.assembly_code.append("\tld l, a")
 
 
     def visit_VarAccess(self, node: VarAccess) -> None:
@@ -323,23 +360,25 @@ class CodeGenerator:
                     self.assembly_code.append("\tld a, l")
                     self.assembly_code.append(f"\tld (ix{offset:+}), a")
 
-        # ... (配列への代入は今後の課題) ...
+        # 配列への代入
         elif isinstance(node.left, ArrayAccess):
-            # ... 配列アクセスの代入処理 (同様に型のサイズを考慮) ...
-            # 配列要素への代入
             self.assembly_code.append("; Assignment to array element")
             # 1. 右辺の値を評価 -> HL
             self.visit(node.right)
-            # 2. 計算結果をスタックに退避
             self.assembly_code.append("\tpush hl")
-            # 3. 左辺の要素アドレスを計算 -> HL
-            self.get_element_address_in_hl(node.left)
-            # 4. 退避した値をDEに復元
+            # 2. 左辺の要素アドレスを計算 -> HL
+            self._get_element_address_in_hl(node.left)
+            # 3. 退避した値をDEに復元
             self.assembly_code.append("\tpop de")
-            # 5. DEの値をHLが指すアドレスにストア
-            self.assembly_code.append("\tld (hl), e   ; Store low byte")
-            self.assembly_code.append("\tinc hl")
-            self.assembly_code.append("\tld (hl), d   ; Store high byte")
+            # 4. DEの値をHLが指すアドレスにストア
+            symbol = self.symbol_table.lookup(node.left.var_node.value)
+            if self.get_symbol_size(symbol) == 2: # int
+                self.assembly_code.append("\tld (hl), e")
+                self.assembly_code.append("\tinc hl")
+                self.assembly_code.append("\tld (hl), d")
+            else: # byte
+                self.assembly_code.append("\tld (hl), e ; Note: storing low byte of DE")
+
 
     def visit_Block(self, node):
         for stmt in node.statements:
@@ -498,29 +537,6 @@ class CodeGenerator:
         # 3. Store A at the address pointed to by HL
         self.assembly_code.append(f"\tld (hl), a ; MEM[addr] = value")
 
-    def get_element_address_in_hl(self, node):
-        """配列要素のアドレスを計算してHLレジスタに入れる"""
-        # (このメソッドは visit_ArrayAccess と visit_Assignment で使用)
-        var_name = node.var_node.value
-        symbol = self.symbol_table.lookup(var_name)
-
-        self.assembly_code.append(f"; Calculate address for {var_name}[i]")
-        # 1. インデックス`i`の値を評価 -> HL
-        self.visit(node.index_expr)
-
-        # 2. 要素サイズを乗算 (i * element_size)
-        #    int (2 bytes) の場合は HL = HL * 2 -> ADD HL, HL
-        if symbol.type.value == 'int':
-            self.assembly_code.append("\tadd hl, hl ; index *= 2")
-
-        # 3. ベースアドレスと加算
-        #    HL = (base_addr) + (i * size)
-        self.assembly_code.append("\tld de, (ix-...) ; Load base address offset")
-        self.assembly_code.append("\tadd hl, de     ; Add base address to offset")
-        # 注: 実際には、IXからのオフセットをシンボルテーブルで管理し、
-        #     IX + 計算済みオフセット のアドレスをHLに入れる必要がある。
-        #     ここでは概念的なコードを示します。
-
     def visit_UnaryOp(self, node: UnaryOp) -> None:
         if node.op.type == 'AMPERSAND':
             # &var の場合、varのアドレスをHLにロードする
@@ -553,3 +569,61 @@ class CodeGenerator:
         label = self._get_string_label(node.value)
         self.assembly_code.append(f"; Load string literal address")
         self.assembly_code.append(f"\tld hl, {label}")
+
+    def visit_ForInStatement(self, node: ForInStatement) -> None:
+        self._emit_source_comment(node)
+
+        array_name = node.array_node.value
+        array_symbol = self.symbol_table.lookup(array_name)
+        item_name = node.item_token.value
+
+        # ループ変数'item'のオフセットを取得
+        item_symbol = node.local_symbols[item_name]
+        item_offset = item_symbol.offset
+
+        loop_start_label = self.new_label()
+        loop_end_label = self.new_label()
+
+        self.assembly_code.append(f"; For '{item_name}' in '{array_name}'")
+        # --- ループセットアップ ---
+        # 1. 配列のベースアドレスをIXにロード (ポインタとして使用)
+        self.assembly_code.append(f"\tld ix, {array_name}")
+        # 2. 配列の要素数をBCにロード (カウンタとして使用)
+        self.assembly_code.append(f"\tld bc, {array_symbol.size}")
+
+        # --- ループ開始 ---
+        self.assembly_code.append(f"{loop_start_label}:")
+        # 3. カウンタが0かチェック
+        self.assembly_code.append("\tld a, b")
+        self.assembly_code.append("\tor c")
+        self.assembly_code.append(f"\tjp z, {loop_end_label}")
+
+        # 4. IXが指す要素を'item'変数にコピー
+        #    (IX) -> DE, DE -> (IY+item_offset) のような処理が必要
+        #    簡単のため、IXからHLにロードし、それをストアする
+        self.assembly_code.append("\tld e, (ix+0)")
+        self.assembly_code.append("\tld d, (ix+1)")
+        self.assembly_code.append("\tex de, hl")
+        self.assembly_code.append(f"\tld (iy{item_offset:+}), l") # フレームポインタをIYと仮定
+        self.assembly_code.append(f"\tld (iy{item_offset+1:+}), h")
+
+        # 5. 配列ポインタ(IX)を進める
+        self.assembly_code.append("\tinc ix")
+        self.assembly_code.append("\tinc ix")
+
+        # --- ループ本体のコードを生成 ---
+        # forループ専用スコープに入る
+        self.symbol_table.enter_scope()
+        for name, symbol in node.local_symbols.items():
+            self.symbol_table.define(symbol)
+
+        self.visit(node.body)
+
+        self.symbol_table.leave_scope()
+
+        # 6. カウンタをデクリメントしてループ先頭へ
+        self.assembly_code.append("\tdec bc")
+        self.assembly_code.append(f"\tjp {loop_start_label}")
+
+        # --- ループ終了 ---
+        self.assembly_code.append(f"{loop_end_label}:")

@@ -1,7 +1,13 @@
-// void puts(int addr); のような関数が利用可能であると仮定
-void puts(int s) {}
+int data[3];
+int sum = 0;
 
 int main() {
-    puts("Hello, World!");
-    puts("こんにちは、世界！");
+    data[0] = 10;
+    data[1] = 20;
+    data[2] = 30;
+
+    for item in data do {
+        sum = sum + item;
+    }
+    return sum; // 60が返るはず
 }

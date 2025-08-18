@@ -48,7 +48,12 @@ class StringLiteral(AST):
     def __init__(self, token: Token):
         self.token: Token = token
         self.value: str = token.value
-
+class ForInStatement(AST):
+    def __init__(self, item_token: Token, array_node: AST, body: Block):
+        self.item_token = item_token
+        self.array_node = array_node
+        self.body = body
+        self.local_symbols: dict[str, Symbol] = {} # ループ変数用のスコープ
 
 # --- Parser ---
 class Parser:
@@ -211,6 +216,9 @@ class Parser:
         if tok_type == 'ID' or tok_type == 'MEM':
             return self.parse_assignment_or_call_statement()
 
+        if tok_type == 'FOR':
+            return self.parse_for_in_statement()
+
         if tok_type == 'IF': return self.parse_if_statement()
         if tok_type == 'WHILE': return self.parse_while_statement()
         if tok_type == 'RETURN': return self.parse_return_statement()
@@ -368,3 +376,32 @@ class Parser:
                 self.eat('COMMA'); args.append(self.parse_expression())
         self.eat('RPAREN')
         return FuncCall(name_token, args)
+
+    def parse_for_in_statement(self) -> ForInStatement:
+        self.eat('FOR')
+        item_token = self.current_token
+        self.eat('ID')
+        self.eat('IN')
+        array_node = self.parse_expression()
+        self.eat('DO')
+
+        # forループ専用のスコープに入る
+        self.symbol_table.enter_scope()
+
+        # ループ変数をシンボルとして登録 (型は配列の要素型から推論)
+        array_symbol = self.symbol_table.lookup(array_node.value) # 簡単のため変数ノードと仮定
+        if not array_symbol or not array_symbol.is_array:
+            self._error(f"'{array_node.value}' is not an array and cannot be iterated", array_node.token)
+
+        # item変数の型は配列の型と同じ
+        item_symbol = VariableSymbol(item_token.value, array_symbol.type, 'local')
+        self.symbol_table.define(item_symbol)
+
+        body = self.parse_block_statement()
+
+        local_symbols = self.symbol_table.scopes[-1]
+        self.symbol_table.leave_scope()
+
+        node = ForInStatement(item_token, array_node, body)
+        node.local_symbols = local_symbols # codegen用にローカルシンボルを保存
+        return node
