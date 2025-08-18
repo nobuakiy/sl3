@@ -435,6 +435,12 @@ class Parser:
         if not token:
             self._error("Unexpected end of expression")
 
+        if token.type == 'LPAREN':
+            self.eat('LPAREN')
+            node = self.parse_expression() # 括弧の中の式を再帰的に解析
+            self.eat('RPAREN')
+            return node
+
         # ★ STRINGトークンの解析を追加
         if token.type == 'STRING':
             self.advance()

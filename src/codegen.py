@@ -552,13 +552,41 @@ class CodeGenerator:
         self.assembly_code.append(f"; Load number {node.value}")
         self.assembly_code.append(f"\tld hl, {node.value}")
 
-# (codegen.py内のvisit_BinOpメソッドを修正)
+    def _try_fold_expression(self, node: AST) -> Optional[int]:
+        """式ASTノードを再帰的に評価し、定数に畳み込めるならその値を返す"""
+        if isinstance(node, Number):
+            return node.value
+
+        if isinstance(node, BinOp):
+            # まず左右の子を再帰的に畳み込みしようと試みる
+            left_val = self._try_fold_expression(node.left)
+            right_val = self._try_fold_expression(node.right)
+
+            # 左右両方が定数値に解決できた場合のみ計算を進める
+            if left_val is not None and right_val is not None:
+                op_type = node.op.type
+                if op_type == 'PLUS': return left_val + right_val
+                if op_type == 'MINUS': return left_val - right_val
+                if op_type == 'MUL': return left_val * right_val
+                if op_type == 'DIV':
+                    if right_val == 0: self._error("Division by zero", node.op)
+                    return left_val // right_val
+
+        # 畳み込みができなかった場合
+        return None
 
     def visit_BinOp(self, node: BinOp) -> None:
-        op_type = node.op.type
-
-        # 共通の評価ロジック
         self._emit_source_comment(node)
+
+        # --- ★ 新しい再帰的な定数畳み込みロジック ---
+        folded_value = self._try_fold_expression(node)
+        if folded_value is not None:
+            self.assembly_code.append(f"; Expression folded to {folded_value}")
+            self.assembly_code.append(f"\tld hl, {folded_value}")
+            return # ★ 最適化したので、ここで処理を終了
+
+        # --- 以下は、定数畳み込みができなかった場合の従来の処理 ---
+        op_type = node.op.type
         self.assembly_code.append(f"; Begin BinOp {op_type}")
         self.visit(node.right)
         self.assembly_code.append("\tpush hl")
