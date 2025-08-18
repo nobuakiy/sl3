@@ -1,4 +1,5 @@
 from __future__ import annotations
+import sys
 from lexer import Lexer, Token
 from parser import Parser, AST
 from codegen import CodeGenerator
@@ -29,19 +30,11 @@ def main(source_file: str, output_file: str) -> None:
 
     with open(output_file, 'w') as f:
         f.write(assembly_code)
-    
+
     print(f"\n✅ Compilation successful! Assembly written to {output_file}")
 
 
 if __name__ == '__main__':
-    # わざとセミコロンを忘れたエラーを含むinput.langを作成
-#     with open("input.lang", "w") as f:
-#         f.write("""
-# int my_global_variable = 100;  // <--- セミコロンを追加
-
-# // 3行目
-# int main() {
-#     return 0;
-# }
-# """)
-    main("input.lang", "output.z80")
+    input_file = sys.argv[1] if len(sys.argv) > 1 else "input.lang"
+    output_file = sys.argv[2] if len(sys.argv) > 2 else "output.z80"
+    main(input_file, output_file)

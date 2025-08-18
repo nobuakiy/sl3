@@ -557,6 +557,17 @@ class CodeGenerator:
         if isinstance(node, Number):
             return node.value
 
+        # const変数の初期値を畳み込む
+        if isinstance(node, VarAccess):
+            symbol = self.symbol_table.lookup(node.value)
+            if symbol and isinstance(symbol, VariableSymbol) and symbol.is_const:
+                return symbol.const_value
+                # const変数の初期値を取得する
+                # VarDeclノードに初期値のASTが保存されているので、それを再帰的に評価する
+                # var_decl_node = symbol.declaration_node # シンボルに宣言ノードへの参照が必要
+                # if var_decl_node and var_decl_node.initial_value:
+                #     return self._try_fold_expression(var_decl_node.initial_value)
+
         if isinstance(node, BinOp):
             # まず左右の子を再帰的に畳み込みしようと試みる
             left_val = self._try_fold_expression(node.left)
