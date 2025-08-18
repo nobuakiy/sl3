@@ -16,6 +16,7 @@ class VariableSymbol(Symbol):
         self.is_array: bool = is_array
         self.size: int = size
         self.is_const: bool = is_const  # 定数フラグを追加
+        self.const_value: Optional[int] = None  # 定数値を保持するための属性
 
 class FunctionSymbol(Symbol):
     """関数シンボル"""

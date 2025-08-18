@@ -3,7 +3,7 @@ from symbol_table import ScopedSymbolTable, VariableSymbol, Symbol
 from parser import (AST, Program, VarDecl, Assignment, IfStatement, WhileStatement,
                     FuncDecl, FuncCall, ReturnStatement, Block, ArrayAccess, BinOp,
                     Number, VarAccess, MemAccess, UnaryOp, StringLiteral, ForInStatement,
-                    BitAccess)
+                    BitAccess, MethodCall)
 
 class CodeGenerator:
     def __init__(self) -> None:
@@ -331,7 +331,7 @@ class CodeGenerator:
         self.assembly_code.append(f"\tbit {bit_num}, a")
         # 結果(Zフラグ)を数値に変換してHLに入れる
         self.assembly_code.append("\tld hl, 0")
-        self.assembly_code.append("\tjp z, .L_BIT_ZERO{self.label_count}") # Zフラグがセット(ビットが0)ならジャンプ
+        self.assembly_code.append(f"\tjp z, .L_BIT_ZERO{self.label_count}") # Zフラグがセット(ビットが0)ならジャンプ
         self.assembly_code.append("\tld hl, 1")
         self.assembly_code.append(f".L_BIT_ZERO{self.label_count}:")
         self.label_count += 1
@@ -681,3 +681,24 @@ class CodeGenerator:
 
         # --- ループ終了 ---
         self.assembly_code.append(f"{loop_end_label}:")
+
+    def visit_MethodCall(self, node: MethodCall) -> None:
+        self._emit_source_comment(node)
+        var_name = node.var_node.value
+        method_name = node.method_token.value.upper() # "append" -> "APPEND"
+
+        self.assembly_code.append(f"; Method call: {var_name}.{method_name}")
+
+        # 引数を評価してレジスタにセット
+        # (例: appendの第1引数をDEに)
+        if node.args:
+            self.visit(node.args[0])
+            self.assembly_code.append("\tpush hl")
+            self.assembly_code.append("\tpop de")
+
+        # StringBuffer変数のアドレスをHLにロード
+        # (シンボルテーブルからアドレスを取得するロジック)
+        self.assembly_code.append(f"\tld hl, {var_name}")
+
+        # ランタイム関数を呼び出し
+        self.assembly_code.append(f"\tcall SB_{method_name}")

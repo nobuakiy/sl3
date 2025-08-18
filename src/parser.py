@@ -58,6 +58,11 @@ class BitAccess(AST):
     def __init__(self, var_node: VarAccess, bit_num_token: Token):
         self.var_node = var_node
         self.bit_num_token = bit_num_token
+class MethodCall(AST):
+    def __init__(self, var_node: VarAccess, method_token: Token, args: list[AST]):
+        self.var_node = var_node
+        self.method_token = method_token
+        self.args = args
 
 # --- Parser ---
 class Parser:
@@ -141,6 +146,17 @@ class Parser:
         if self.current_token and self.current_token.type == 'ASSIGN':
             self.eat('ASSIGN')
             initial_value = self.parse_expression()
+            if is_const:
+                # ★ const変数の初期値は整数リテラルまたはconst変数のみ許可
+                if not isinstance(initial_value, Number) and not (isinstance(initial_value, VarAccess) and initial_value.token.value in self.symbol_table.constants):
+                    self._error(f"Constant variable '{name_token.value}' must be initialized with a constant expression", name_token)
+                else:
+                    # 初期値が整数リテラルまたはconst変数の場合、値を保存
+                    if isinstance(initial_value, Number):
+                        symbol.const_value = initial_value.value
+                    else:
+                        # 本当は定数表現であれば、計算したいが...
+                        pass
 
         # ★ const変数が初期化されているかチェック
         if is_const and initial_value is None:
@@ -149,13 +165,39 @@ class Parser:
         self.eat('SEMICOLON')
         return VarDecl(type_node, name_token, initial_value, is_array, size)
 
+    def _parse_const_integer(self) -> int:
+        """定数として扱える整数値（リテラルまたはconst変数）を解析して返す"""
+        token = self.current_token
+        if token.type == 'INTEGER':
+            self.advance()
+            return token.value
+
+        if token.type == 'ID':
+            symbol = self.symbol_table.lookup(token.value)
+            if symbol and isinstance(symbol, VariableSymbol) and symbol.is_const:
+                # シンボルがconstの場合、その初期値を取得する必要がある。
+                # このためには、VarDeclノードに初期値の情報を保存しておく必要がある。
+                # ここでは簡単のため、定数値がシンボルに直接格納されていると仮定する。
+                # 実際のプロジェクトでは、シンボルに初期化式への参照を持たせるなどの工夫が必要。
+
+                # --- 仮実装 ---
+                # シンボルテーブルに定数の値を保存するよう拡張したと仮定
+                if hasattr(symbol, 'const_value'):
+                    self.advance()
+                    return symbol.const_value
+                else:
+                    self._error(f"Value of const '{token.value}' not available at compile time", token)
+
+            self._error(f"Expected a constant integer expression", token)
+
+        self._error(f"Expected an integer literal or a const identifier", token)
 
     def _parse_array_size(self) -> int:
         self.eat('LBRACKET')
-        size_node = self.parse_primary()
-        if not isinstance(size_node, Number): self._error("Array size must be an integer literal")
+        # ★ 整数リテラルだけでなく、const変数も使えるようにする
+        size = self._parse_const_integer()
         self.eat('RBRACKET')
-        return size_node.value
+        return size
 
     def parse_function_declaration(self, type_node: Type, name_token: Token) -> FuncDecl:
         func_symbol = FunctionSymbol(name_token.value, type_node)
@@ -215,7 +257,7 @@ class Parser:
             self.eat('CONST')
 
         tok_type = self.current_token.type
-        if tok_type in ('INT', 'BYTE'):
+        if tok_type in ('INT', 'BYTE', 'STRINGBUFFER'):
             type_node = self.parse_type()
             name_token = self.current_token
             self.eat('ID')
@@ -237,51 +279,46 @@ class Parser:
         self._error(f"Invalid statement starting with '{tok_type}'")
 
     def parse_assignment_or_call_statement(self) -> AST:
-        left_node: AST
-        if self.current_token.type == 'MEM':
-            self.eat('MEM')
-            self.eat('LBRACKET')
-            addr_expr = self.parse_expression()
-            self.eat('RBRACKET')
+        # MEMで始まる文は代入しかありえない
+        if self.current_token and self.current_token.type == 'MEM':
+            self.eat('MEM'); self.eat('LBRACKET')
+            addr_expr = self.parse_expression(); self.eat('RBRACKET')
             left_node = MemAccess(addr_expr)
+            self.eat('ASSIGN'); right_node = self.parse_expression(); self.eat('SEMICOLON')
+            return Assignment(left_node, right_node)
 
-        elif self.current_token.type == 'ID':
-            name_token = self.current_token
-            # 関数呼び出し
-            if self.peek_token and self.peek_token.type == 'LPAREN':
-                call_node = self.parse_function_call()
-                self.eat('SEMICOLON')
-                return call_node
+        # IDで始まる文の解析
+        if not self.current_token or self.current_token.type != 'ID':
+             self._error("Internal parser error: expected an identifier.")
 
-            # 代入文の解析
-            # ★ 左辺がビットアクセスの場合を処理
-            if self.peek_token and self.peek_token.type == 'DOT':
-                var_node = VarAccess(self.current_token)
-                self.advance()
-                self.eat('DOT')
-                bit_num_token = self.current_token
-                self.advance()
-                left_node = BitAccess(var_node, bit_num_token)
+        name_token = self.current_token
 
-            else:
-                # ★ const変数への代入をチェック
-                left_node_token = self.current_token
-                self.eat('ID')
-                left_node = VarAccess(left_node_token)
+        # IDの次のトークンを先読みして分岐
+        if self.peek_token and self.peek_token.type == 'DOT':
+            # --- メソッド呼び出し文 (sb.append(...);) ---
+            self.eat('ID') # sb
+            self.eat('DOT')
+            method_token = self.current_token
+            self.eat('ID') # append
+            self.eat('LPAREN')
+            args: list[AST] = []
+            if self.current_token and self.current_token.type != 'RPAREN':
+                args.append(self.parse_expression())
+                while self.current_token and self.current_token.type == 'COMMA':
+                    self.eat('COMMA'); args.append(self.parse_expression())
+            self.eat('RPAREN')
+            self.eat('SEMICOLON')
+            return MethodCall(VarAccess(name_token), method_token, args)
+        else:
+            # --- 変数または配列への代入文 (x = ...; or x[...] = ...;) ---
+            self.eat('ID')
+            left_node: AST = VarAccess(name_token)
+            if self.current_token and self.current_token.type == 'LBRACKET':
+                self.eat('LBRACKET'); index_expr = self.parse_expression(); self.eat('RBRACKET')
+                left_node = ArrayAccess(left_node, index_expr)
 
-                symbol = self.symbol_table.lookup(left_node_token.value)
-                if symbol and isinstance(symbol, VariableSymbol) and symbol.is_const:
-                    self._error(f"Cannot assign to constant variable '{left_node_token.value}'", left_node_token)
-
-                # 配列アクセスのチェック
-                if self.current_token and self.current_token.type == 'LBRACKET':
-                    self.eat('LBRACKET'); index_expr = self.parse_expression(); self.eat('RBRACKET')
-                    left_node = ArrayAccess(left_node, index_expr)
-
-        self.eat('ASSIGN');
-        right_node: AST = self.parse_expression()
-        self.eat('SEMICOLON')
-        return Assignment(left_node, right_node)
+            self.eat('ASSIGN'); right_node = self.parse_expression(); self.eat('SEMICOLON')
+            return Assignment(left_node, right_node)
 
     def parse_block_statement(self) -> Block:
         self.eat('LBRACE')
@@ -339,7 +376,7 @@ class Parser:
 
     def parse_type(self) -> Type:
         token = self.current_token
-        if token and token.type in ('INT', 'BYTE', 'VOID'):
+        if token and token.type in ('INT', 'BYTE', 'VOID', 'STRINGBUFFER'):
             self.advance();
             return Type(token)
         self._error("Expected a type specifier")
@@ -376,12 +413,31 @@ class Parser:
             name_token = token
             self.advance()
 
-            # bitアクセスのチェック
+            # メソッド呼び出しとbitアクセス
             if self.current_token and self.current_token.type == 'DOT':
                 self.eat('DOT')
-                bit_num_token = self.current_token
-                self.eat('INTEGER')
-                return BitAccess(VarAccess(name_token), bit_num_token)
+                # DOTの後ろにIDが来る場合はメソッド呼び出し
+                if self.current_token and self.current_token.type == 'ID':
+                    method_token = self.current_token
+                    self.eat('ID')
+                    args: list[AST] = []
+                    if self.current_token and self.current_token.type == 'LPAREN':
+                        self.eat('LPAREN')
+                        if self.current_token and self.current_token.type != 'RPAREN':
+                            args.append(self.parse_expression())
+                            while self.current_token and self.current_token.type == 'COMMA':
+                                self.eat('COMMA')
+                                args.append(self.parse_expression())
+                        self.eat('RPAREN')
+                    return MethodCall(VarAccess(name_token), method_token, args)
+
+                else:
+                    # ビットアクセス
+                    # ★ ビット番号にもconst変数を使えるようにする
+                    bit_num_val = self._parse_const_integer()
+                    # BitAccessノードはトークンではなく数値を直接受け取るように変更するのが望ましい
+                    bit_num_token = Token('INTEGER', bit_num_val)
+                    return BitAccess(VarAccess(name_token), bit_num_token)
 
             # 関数呼び出し
             if self.peek_token and self.peek_token.type == 'LPAREN':
