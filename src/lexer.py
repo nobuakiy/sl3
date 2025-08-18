@@ -16,10 +16,8 @@ class Lexer:
     """ソースコードをトークンのストリームに変換する"""
     def __init__(self, code: str):
         self.code: str = code
-        # トークンの正規表現定義
         self.token_specs: list[tuple[str, str]] = [
             ('COMMENT',    r'//.*'),
-            # キーワード (単語境界 \b を追加)
             ('CONST',      r'\bconst\b'),
             ('INT',        r'\bint\b'),
             ('BYTE',       r'\bbyte\b'),
@@ -31,20 +29,21 @@ class Lexer:
             ('FOR',        r'\bfor\b'), 
             ('IN',         r'\bin\b'), 
             ('DO',         r'\bdo\b'),
+            ('MEM',        r'\bMEM\b'), # MEMキーワードを追加
             ('STRINGBUFFER', r'\bStringBuffer\b'),
-            # 識別子 (キーワードの後に定義)
             ('ID',         r'[a-zA-Z_][a-zA-Z0-9_]*'),
-            # リテラル
             ('INTEGER',    r'0x[0-9a-fA-F]+|[0-9]+'),
             ('STRING',     r'"[^"]*"'),
-            # 演算子と区切り文字
             ('EQ', r'=='), ('NE', r'!='), ('LE', r'<='), ('GE', r'>='),
             ('LPAREN', r'\('), ('RPAREN', r'\)'), ('LBRACKET', r'\['),
             ('RBRACKET', r'\]'), ('LBRACE', r'\{'), ('RBRACE', r'\}'),
             ('COMMA', r','), ('PLUS', r'\+'), ('MINUS', r'-'),
             ('MUL', r'\*'), ('DIV', r'/'), ('ASSIGN', r'='),
-            ('LT', r'<'), ('GT', r'>'), ('SEMICOLON', r';'),
-            # その他
+            ('LT', r'<'), ('GT', r'>'),
+            ('AMPERSAND',  r'&'), # ★ この行を追加しました
+            ('PIPE',       r'\|'),
+            ('CARET',      r'\^'),
+            ('SEMICOLON', r';'),
             ('NEWLINE',    r'\n'),
             ('SKIP',       r'[ \t]+'),
             ('MISMATCH',   r'.'),

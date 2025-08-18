@@ -9,12 +9,13 @@ class Symbol:
 
 class VariableSymbol(Symbol):
     """変数シンボル (グローバル/ローカル/引数)"""
-    def __init__(self, name: str, type: 'Type', scope: str, offset: int = 0, is_array: bool = False, size: int = 0):
+    def __init__(self, name: str, type: 'Type', scope: str, offset: int = 0, is_array: bool = False, size: int = 0, is_const: bool = False):
         super().__init__(name, type)
         self.scope: str = scope
         self.offset: int = offset
         self.is_array: bool = is_array
         self.size: int = size
+        self.is_const: bool = is_const  # 定数フラグを追加
 
 class FunctionSymbol(Symbol):
     """関数シンボル"""

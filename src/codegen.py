@@ -2,7 +2,7 @@ from __future__ import annotations
 from symbol_table import ScopedSymbolTable, VariableSymbol, Symbol
 from parser import (AST, Program, VarDecl, Assignment, IfStatement, WhileStatement, 
                     FuncDecl, FuncCall, ReturnStatement, Block, ArrayAccess, BinOp, 
-                    Number, VarAccess)
+                    Number, VarAccess, MemAccess, UnaryOp)
 
 class CodeGenerator:
     def __init__(self) -> None:
@@ -227,6 +227,20 @@ class CodeGenerator:
     def visit_Assignment(self, node: Assignment) -> None:
         self._emit_source_comment(node)  # ソースコードの行をコメントとして出力
 
+        if isinstance(node.left, MemAccess):
+            # MEM[addr] = value の場合
+            # 1. 右辺の値を評価 -> HL
+            self.visit(node.right)
+            self.assembly_code.append("\tpush hl")
+            # 2. 左辺のアドレス式を評価 -> HL
+            self.visit(node.left.address_expr)
+            self.assembly_code.append("\tpop de     ; Value to store in DE")
+            # 3. DEの値をHLが指すアドレスにストア
+            self.assembly_code.append("\tld (hl), e")
+            self.assembly_code.append("\tinc hl")
+            self.assembly_code.append("\tld (hl), d")
+        # ... (他の代入処理)
+
         # 1. 右辺の式を評価 -> 結果はHLに入る
         self.visit(node.right)
         
@@ -319,7 +333,7 @@ class CodeGenerator:
 
     def visit_WhileStatement(self, node):
         self._emit_source_comment(node)  # ソースコードの行をコメントとして出力
-        
+
         loop_start_label = self.new_label()
         loop_end_label = self.new_label()
         
@@ -456,3 +470,29 @@ class CodeGenerator:
         #     IX + 計算済みオフセット のアドレスをHLに入れる必要がある。
         #     ここでは概念的なコードを示します。
         
+    def visit_UnaryOp(self, node: UnaryOp) -> None:
+        if node.op.type == 'AMPERSAND':
+            # &var の場合、varのアドレスをHLにロードする
+            var_name = node.expr.value # 簡単のため、exprが変数名であると仮定
+            symbol = self.symbol_table.lookup(var_name)
+            
+            self.assembly_code.append(f"; Address of '{var_name}'")
+            if symbol.scope == 'global':
+                self.assembly_code.append(f"\tld hl, {var_name}")
+            else: # local
+                # HL = IX + offset
+                self.assembly_code.append("\tpush ix")
+                self.assembly_code.append("\tpop hl")
+                self.assembly_code.append(f"\tld de, {symbol.offset}")
+                self.assembly_code.append("\tadd hl, de")
+
+    def visit_MemAccess(self, node: MemAccess) -> None:
+        # MEM[addr] の値を読む場合
+        self.assembly_code.append(f"; Read from MEM[]")
+        # 1. アドレス式を評価 -> 結果がHLに入る
+        self.visit(node.address_expr)
+        # 2. HLが指すアドレスから値をロードし、HLに格納
+        self.assembly_code.append("\tld e, (hl)   ; Load low byte")
+        self.assembly_code.append("\tinc hl")
+        self.assembly_code.append("\tld d, (hl)   ; Load high byte")
+        self.assembly_code.append("\tex de, hl")

@@ -1,13 +1,17 @@
-int int_val = 1000;
-byte byte_val = 50;
-int result = 0;
+int vram_addr = 0x8000;
+const int MY_CONST = 123;
 
-// main関数を定義し、その中で実行コードを処理する
 int main() {
-    result = int_val + byte_val; 
+    int x = 10;
+    int ptr;
     
-    byte byte_val_local = 0;
-    byte_val_local = result; // 代入も関数の中
+    // 変数xのアドレスをptrに格納
+    ptr = &x;
+    
+    // ポインタ経由でxの値を読み出し、書き込み
+    // (MEM[ptr] = MEM[ptr] + MY_CONST)
+    MEM[ptr] = MEM[ptr] + MY_CONST;
 
-    return result;
+    // 直接アドレスを指定してVRAMに書き込み
+    MEM[vram_addr] = 255;
 }

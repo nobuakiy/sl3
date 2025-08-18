@@ -30,6 +30,10 @@ class Block(AST):
     def __init__(self, statements: list[AST]): self.statements: list[AST] = statements
 class ArrayAccess(AST):
     def __init__(self, var_node: VarAccess, index_expr: AST): self.var_node, self.index_expr = var_node, index_expr
+class UnaryOp(AST):
+    def __init__(self, op: Token, expr: AST): self.op, self.expr = op, expr
+class MemAccess(AST):
+    def __init__(self, address_expr: AST): self.address_expr: AST = address_expr
 class BinOp(AST):
     def __init__(self, left: AST, op: Token, right: AST): self.left, self.op, self.right = left, op, right
 class Number(AST):
@@ -82,29 +86,48 @@ class Parser:
         return Program(declarations)
 
     def parse_top_level_declaration(self) -> AST:
+        # ★ constキーワードをチェック
+        is_const = False
+        if self.current_token and self.current_token.type == 'CONST':
+            is_const = True
+            self.eat('CONST')
+
         type_node = self.parse_type()
         name_token = self.current_token
-        self.eat('ID') # IDを消費
+        self.eat('ID')
+        
         if self.current_token and self.current_token.type == 'LPAREN':
+            if is_const:
+                self._error("Functions cannot be declared const", name_token)
             return self.parse_function_declaration(type_node, name_token)
         else:
-            return self.parse_variable_declaration(type_node, name_token)
+            # ★ is_constフラグを渡す
+            return self.parse_variable_declaration(type_node, name_token, is_const=is_const)
 
-    def parse_variable_declaration(self, type_node: Type, name_token: Token) -> VarDecl:
+    def parse_variable_declaration(self, type_node: Type, name_token: Token, is_const: bool = False) -> VarDecl:
+        # (is_constを引数として受け取るように変更)
         is_array, size = False, 0
         if self.current_token and self.current_token.type == 'LBRACKET':
             is_array, size = True, self._parse_array_size()
-        
+            
         scope = 'global' if self.symbol_table.scope_level == 0 else 'local'
-        # ここでローカル変数のオフセットを計算・管理する必要がある (今後の課題)
-        symbol = VariableSymbol(name_token.value, type_node, scope, is_array=is_array, size=size)
+        # ★ is_constフラグをシンボルに設定
+        symbol = VariableSymbol(name_token.value, type_node, scope, 
+                                is_array=is_array, size=size, is_const=is_const)
         self.symbol_table.define(symbol)
         
         initial_value = None
         if self.current_token and self.current_token.type == 'ASSIGN':
-            self.eat('ASSIGN'); initial_value = self.parse_expression()
+            self.eat('ASSIGN')
+            initial_value = self.parse_expression()
+        
+        # ★ const変数が初期化されているかチェック
+        if is_const and initial_value is None:
+            self._error(f"Constant variable '{name_token.value}' must be initialized", name_token)
+
         self.eat('SEMICOLON')
         return VarDecl(type_node, name_token, initial_value, is_array, size)
+
     
     def _parse_array_size(self) -> int:
         self.eat('LBRACKET')
@@ -135,14 +158,24 @@ class Parser:
 
     def parse_statement(self) -> AST:
         if not self.current_token: self._error("Unexpected end of file")
+        is_const = False
+        if self.current_token.type == 'CONST':
+            is_const = True
+            self.eat('CONST')
+
         tok_type = self.current_token.type
         if tok_type in ('INT', 'BYTE'):
-            # 文中の変数宣言は、型 -> ID -> ... と続く
             type_node = self.parse_type()
             name_token = self.current_token
-            self.eat('ID') # IDを消費
-            return self.parse_variable_declaration(type_node, name_token)
-        if tok_type == 'ID': return self.parse_assignment_or_call_statement()
+            self.eat('ID')
+            return self.parse_variable_declaration(type_node, name_token, is_const=is_const)
+        
+        if is_const: # constの後ろに型名がなければエラー
+            self._error("Expected a type specifier after 'const'")
+
+        if tok_type == 'ID' or tok_type == 'MEM':
+            return self.parse_assignment_or_call_statement()
+        
         if tok_type == 'IF': return self.parse_if_statement()
         if tok_type == 'WHILE': return self.parse_while_statement()
         if tok_type == 'RETURN': return self.parse_return_statement()
@@ -150,19 +183,39 @@ class Parser:
         self._error(f"Invalid statement starting with '{tok_type}'")
 
     def parse_assignment_or_call_statement(self) -> AST:
-        name_token = self.current_token
-        # 関数呼び出しかどうかを先読み
-        if self.peek_token and self.peek_token.type == 'LPAREN':
-            call_node = self.parse_function_call()
-            self.eat('SEMICOLON')
-            return call_node
-        
-        # 代入文の解析
-        self.eat('ID'); left_node: AST = VarAccess(name_token)
-        if self.current_token and self.current_token.type == 'LBRACKET':
-            self.eat('LBRACKET'); index_expr = self.parse_expression(); self.eat('RBRACKET')
-            left_node = ArrayAccess(left_node, index_expr)
-        self.eat('ASSIGN'); right_node = self.parse_expression(); self.eat('SEMICOLON')
+        left_node: AST
+        if self.current_token.type == 'MEM':
+            self.eat('MEM')
+            self.eat('LBRACKET')
+            addr_expr = self.parse_expression()
+            self.eat('RBRACKET')
+            left_node = MemAccess(addr_expr)
+        elif self.current_token.type == 'ID':
+            name_token = self.current_token
+            # 関数呼び出しかどうかを先読み
+            if self.peek_token and self.peek_token.type == 'LPAREN':
+                call_node = self.parse_function_call()
+                self.eat('SEMICOLON')
+                return call_node
+
+            # 代入文の解析
+            # ★ const変数への代入をチェック
+            left_node_token = self.current_token
+            self.eat('ID')
+            left_node = VarAccess(left_node_token)
+            
+            symbol = self.symbol_table.lookup(left_node_token.value)
+            if symbol and isinstance(symbol, VariableSymbol) and symbol.is_const:
+                self._error(f"Cannot assign to constant variable '{left_node_token.value}'", left_node_token)        
+
+            # 配列アクセスのチェック
+            if self.current_token and self.current_token.type == 'LBRACKET':
+                self.eat('LBRACKET'); index_expr = self.parse_expression(); self.eat('RBRACKET')
+                left_node = ArrayAccess(left_node, index_expr)
+
+        self.eat('ASSIGN'); 
+        right_node: AST = self.parse_expression()
+        self.eat('SEMICOLON')
         return Assignment(left_node, right_node)
     
     # ... (parse_if, parse_while, parse_return, parse_type は変更なし) ...
@@ -186,6 +239,12 @@ class Parser:
             self.eat('RBRACKET')
             left_node = ArrayAccess(left_node, index_expr)
         self.eat('ASSIGN'); 
+
+        # constantの代入をチェック
+        symbol = self.symbol_table.lookup(name_token.value)
+        if isinstance(symbol, VariableSymbol) and symbol.is_const:
+            self._error(f"Cannot assign to constant variable '{name_token.value}'")
+
         right_node = self.parse_expression(); 
         self.eat('SEMICOLON')
         return Assignment(left_node, right_node)
@@ -224,6 +283,14 @@ class Parser:
         self._error("Expected a type specifier")
 
     def parse_expression(self, prec: int = 0) -> AST:
+        # & のような単項演算子を処理
+        if self.current_token and self.current_token.type == 'AMPERSAND': # &
+            op = self.current_token
+            self.advance()
+            expr = self.parse_expression(100) # 演算子の優先順位を高く設定
+            return UnaryOp(op, expr)
+
+        # 二項演算子の処理
         node = self.parse_primary()
         while self.current_token and self.current_token.type in self.precedence and self.precedence[self.current_token.type] > prec:
             op_token = self.current_token
@@ -236,7 +303,9 @@ class Parser:
         token = self.current_token
         if not token: 
             self._error("Unexpected end of expression")
-        if token.type == 'INTEGER': self.advance(); return Number(token)
+        if token.type == 'INTEGER': 
+            self.advance(); 
+            return Number(token)
         if token.type == 'ID':
             name_token = token
             if self.peek_token and self.peek_token.type == 'LPAREN': return self.parse_function_call()
@@ -245,6 +314,11 @@ class Parser:
                 self.eat('LBRACKET'); index_expr = self.parse_expression(); self.eat('RBRACKET')
                 return ArrayAccess(VarAccess(name_token), index_expr)
             return VarAccess(name_token)
+        if token.type == 'MEM':
+            self.eat('MEM'); self.eat('LBRACKET')
+            addr_expr = self.parse_expression()
+            self.eat('RBRACKET')
+            return MemAccess(addr_expr)        
         self._error(f"Unexpected token in expression: {token}")
 
     def parse_function_call(self) -> FuncCall:
