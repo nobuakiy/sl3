@@ -1,17 +1,7 @@
-int vram_addr = 0x8000;
-const int MY_CONST = 123;
+// void puts(int addr); のような関数が利用可能であると仮定
+void puts(int s) {}
 
 int main() {
-    int x = 10;
-    int ptr;
-    
-    // 変数xのアドレスをptrに格納
-    ptr = &x;
-    
-    // ポインタ経由でxの値を読み出し、書き込み
-    // (MEM[ptr] = MEM[ptr] + MY_CONST)
-    MEM[ptr] = MEM[ptr] + MY_CONST;
-
-    // 直接アドレスを指定してVRAMに書き込み
-    MEM[vram_addr] = 255;
+    puts("Hello, World!");
+    puts("こんにちは、世界！");
 }

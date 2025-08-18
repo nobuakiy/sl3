@@ -1,8 +1,8 @@
 from __future__ import annotations
 from symbol_table import ScopedSymbolTable, VariableSymbol, Symbol
-from parser import (AST, Program, VarDecl, Assignment, IfStatement, WhileStatement, 
-                    FuncDecl, FuncCall, ReturnStatement, Block, ArrayAccess, BinOp, 
-                    Number, VarAccess, MemAccess, UnaryOp)
+from parser import (AST, Program, VarDecl, Assignment, IfStatement, WhileStatement,
+                    FuncDecl, FuncCall, ReturnStatement, Block, ArrayAccess, BinOp,
+                    Number, VarAccess, MemAccess, UnaryOp, StringLiteral)
 
 class CodeGenerator:
     def __init__(self) -> None:
@@ -10,7 +10,9 @@ class CodeGenerator:
         self.label_count: int = 0
         self.symbol_table: ScopedSymbolTable | None = None
         self.source_lines: list[str] = []
-        self.last_commented_line: int = -1 # コメントの重複出力を防ぐ        
+        self.last_commented_line: int = -1 # コメントの重複出力を防ぐ
+        self.string_literals: dict[str, str] = {} # ★ 文字列とラベルを管理する辞書
+
 
     def generate(self, node: AST, symbol_table: ScopedSymbolTable, source_lines: list[str]) -> str:
         self.symbol_table = symbol_table
@@ -44,10 +46,19 @@ class CodeGenerator:
                 self.assembly_code.append(f"\n; {source_line}")
                 self.last_commented_line = line_num
 
+    def _get_string_label(self, str_value: str) -> str:
+        """文字列に対応するラベルを取得。なければ新しいラベルを作成する"""
+        if str_value in self.string_literals:
+            return self.string_literals[str_value]
+
+        label = f".L_STR{len(self.string_literals)}"
+        self.string_literals[str_value] = label
+        return label
+
     def new_label(self) -> str:
         self.label_count += 1
         return f"L{self.label_count}"
-    
+
     def get_symbol_size(self, symbol: Symbol) -> int:
         """シンボルの型からサイズ(バイト)を取得する"""
         if isinstance(symbol, VariableSymbol):
@@ -65,12 +76,12 @@ class CodeGenerator:
 
     def visit_Program(self, node: Program) -> None:
         assert self.symbol_table is not None
-        
+
         # 1. トップレベルのASTノードを分類する
         global_inits = []
         func_decls = []
         global_data_defs = []
-        
+
         for child in node.children:
             if isinstance(child, VarDecl):
                 # .ds定義を作成
@@ -106,11 +117,34 @@ class CodeGenerator:
         for func_decl_node in func_decls:
             self.visit(func_decl_node)
 
+        # ★ visit_Programの最後に文字列リテラルのデータセグメントを追加
+        if self.string_literals:
+            self.assembly_code.append("\n; --- String Literals ---")
+            for str_val, label in self.string_literals.items():
+                self.assembly_code.append(f"{label}:")
+                byte_array = ", ".join(str(b) for b in str_val.encode('cp932'))
+                self.assembly_code.append(f"\t.db {byte_array}, 0 ; \"{str_val}\"")
+
+                # # ★ 文字列がASCII印字可能文字のみで構成されているかチェック
+                # is_ascii_printable = all(32 <= ord(c) < 127 for c in str_val)
+
+                # if is_ascii_printable:
+                #     # ASCIIのみなら、アセンブラの文字列形式で出力
+                #     # アセンブラによって区切り文字が違うため、ここでは ' を使用
+                #     # 文字列内の ' はエスケープする必要がある
+                #     escaped_str = str_val.replace("'", "''")
+                #     self.assembly_code.append(f"\t.db '{escaped_str}', 0")
+                # else:
+                    # マルチバイト文字を含むなら、UTF-8バイト列で出力
+                    # byte_array = ", ".join(str(b) for b in str_val.encode('utf-8'))
+                    # self.assembly_code.append(f"\t.db {byte_array}, 0 ; \"{str_val}\"")
+
+
         self.assembly_code.append("\n; --- Data Segment ---")
         self.assembly_code.append(".area DATA(ABS,DSEG)")
         self.assembly_code.append(".org 0x8000")
         self.assembly_code.extend(global_data_defs)
-            
+
         self.assembly_code.append("\n.end init")
 
 
@@ -129,7 +163,7 @@ class CodeGenerator:
         func_name = node.name_token.value
         self.assembly_code.append(f"\n; --- Function: {func_name} ---")
         self.assembly_code.append(f"{func_name}:")
-        
+
         # --- プロローグ ---
         self.assembly_code.append("\tpush ix")
         self.assembly_code.append("\tld ix, 0")
@@ -155,25 +189,42 @@ class CodeGenerator:
         self.symbol_table.enter_scope()
         for name, symbol in node.local_symbols.items():
             self.symbol_table.define(symbol)
-        
+
+        # ★ 現在処理中の関数名を保存しておく
+        self.current_function_name = func_name
+
         # --- 本体 ---
         self.visit(node.body)
-        
+
         # --- エピローグ ---
+        # ★ 予測可能なラベル名（.L_RET_{関数名}）を使用
         self.assembly_code.append(f".L_RET_{func_name}:")
         self.assembly_code.append("\tld sp, ix")
         self.assembly_code.append("\tpop ix")
         self.assembly_code.append("\tret")
 
-        # ★ コード生成が終わったらローカルスコープを抜ける
         self.symbol_table.leave_scope()
+        self.current_function_name = None # 処理が終わったらクリア
 
-    def visit_FuncCall(self, node):
-        func_name = node.name.value
+    def visit_FuncCall(self, node: FuncCall) -> None:
+        # ★ node.name.value を node.name_token.value に修正
+        func_name = node.name_token.value
         self.assembly_code.append(f"; Function Call: {func_name}")
-        # ... 引数をスタックに積む処理 ...
+
+        # 引数を右から左へスタックに積む
+        if node.args:
+            for arg_node in reversed(node.args):
+                self.visit(arg_node)
+                self.assembly_code.append("\tpush hl")
+
         self.assembly_code.append(f"\tcall {func_name}")
-        # ... スタッククリーンアップ ...
+
+        # 呼び出し側がスタックをクリーンアップ
+        arg_size = len(node.args) * 2 # 引数はint(2byte)と仮定
+        if arg_size > 0:
+            self.assembly_code.append(f"\tld hl, {arg_size}")
+            self.assembly_code.append("\tadd hl, sp")
+            self.assembly_code.append("\tld sp, hl")
 
     def visit_ReturnStatement(self, node):
         self._emit_source_comment(node)  # ソースコードの行をコメントとして出力
@@ -186,7 +237,7 @@ class CodeGenerator:
         # 値を読み出す場合
         # 1. 要素のアドレスをHLに計算
         self.get_element_address_in_hl(node)
-        
+
         # 2. HLが指すアドレスから値をロード
         self.assembly_code.append("\tld e, (hl)   ; Load low byte")
         self.assembly_code.append("\tinc hl")
@@ -200,7 +251,7 @@ class CodeGenerator:
         symbol = self.symbol_table.lookup(var_name)
         if not symbol or not isinstance(symbol, VariableSymbol):
             self._error(f"Undefined variable '{var_name}'", node.token)
-        
+
         self.assembly_code.append(f"; Access var '{var_name}' ({symbol.scope})")
 
         if symbol.scope == 'global':
@@ -243,7 +294,7 @@ class CodeGenerator:
 
         # 1. 右辺の式を評価 -> 結果はHLに入る
         self.visit(node.right)
-        
+
         # 2. 左辺の変数を特定
         left_node = node.left
         if isinstance(left_node, VarAccess):
@@ -299,11 +350,11 @@ class CodeGenerator:
 
         else_label = self.new_label()
         endif_label = self.new_label()
-        
+
         self.assembly_code.append(f"; If statement")
         # 1. 条件式を評価 (visit_BinOpがZ80フラグをセットする)
         self.visit(node.condition)
-        
+
         # 2. 条件が偽の場合にelseブロックへジャンプ
         #    node.condition.op.typeに応じてジャンプ命令を変える
         op = node.condition.op.type
@@ -318,16 +369,16 @@ class CodeGenerator:
         }[op] # GTとLEはより複雑なため簡略化
 
         self.assembly_code.append(f"\t{jump_instruction}, {else_label}")
-        
+
         # 3. thenブロックのコードを生成
         self.visit(node.then_block)
         self.assembly_code.append(f"\tjp {endif_label}") # elseをスキップ
-        
+
         # 4. elseブロックのコードを生成
         self.assembly_code.append(f"{else_label}:")
         if node.else_block:
             self.visit(node.else_block)
-            
+
         # 5. 終了ラベル
         self.assembly_code.append(f"{endif_label}:")
 
@@ -336,15 +387,15 @@ class CodeGenerator:
 
         loop_start_label = self.new_label()
         loop_end_label = self.new_label()
-        
+
         self.assembly_code.append(f"; While statement")
-        
+
         # 1. ループ開始ラベルを配置
         self.assembly_code.append(f"{loop_start_label}:")
-        
+
         # 2. 条件式を評価
         self.visit(node.condition)
-        
+
         # 3. 条件が偽の場合にループの終わりへジャンプ
         op = node.condition.op.type
         jump_instruction = {
@@ -355,13 +406,13 @@ class CodeGenerator:
             # GT, LEはより複雑なため簡略化
         }[op]
         self.assembly_code.append(f"\t{jump_instruction}, {loop_end_label}")
-        
+
         # 4. ループ本体のコードを生成
         self.visit(node.body)
-        
+
         # 5. ループの先頭に戻る無条件ジャンプ
         self.assembly_code.append(f"\tjp {loop_start_label}")
-        
+
         # 6. ループ終了ラベルを配置
         self.assembly_code.append(f"{loop_end_label}:")
 
@@ -378,10 +429,10 @@ class CodeGenerator:
         # 1. 右辺 (RHS) を評価し、結果をスタックに退避
         self.visit(node.right)
         self.assembly_code.append("\tpush hl")
-        
+
         # 2. 左辺 (LHS) を評価 (結果はHLに残る)
         self.visit(node.left)
-        
+
         # 3. 退避した右辺の値をDEレジスタに復元
         self.assembly_code.append("\tpop de")
 
@@ -408,20 +459,20 @@ class CodeGenerator:
             self.assembly_code.append("\t; TODO: Implement multiplication routine")
         else:
             raise NotImplementedError(f"Operator {op_type} not implemented")
-        
+
         self.assembly_code.append(f"; End BinOp {op_type}")
 
     # --- Code Generation for specific features ---
-    
+
     # Example: How `a.3 = 1;` might be compiled
     def visit_BitAssignment(self, node): # Assuming a BitAssignment AST node exists
         # node.variable -> the variable 'a'
         # node.bit_number -> the integer 3
         # node.value -> the value to assign (0 or 1)
-        
+
         var_name = node.variable.value
         bit_num = node.bit_number
-        
+
         # Assume 'a' is a byte variable at a known memory address
         self.assembly_code.append(f"; Bit set for {var_name}.{bit_num}")
         self.assembly_code.append(f"\tld a, ({var_name}) ; Load value of 'a' into accumulator")
@@ -430,16 +481,16 @@ class CodeGenerator:
         else:
             self.assembly_code.append(f"\tres {bit_num}, a       ; Reset bit {bit_num}")
         self.assembly_code.append(f"\tld ({var_name}), a ; Store it back")
-        
+
     # Example: How `MEM[0x8000] = 0x21;` might be compiled
     def visit_MemAssignment(self, node): # Assuming a MemAssignment AST node exists
         # node.address -> the expression for the address (e.g., 0x8000)
         # node.value -> the expression for the value (e.g., 0x21)
-        
+
         # 1. Evaluate value and put it in A (for byte)
         # self.visit(node.value) -> result would be in register A
         self.assembly_code.append(f"\tld a, {hex(node.value.integer)}")
-        
+
         # 2. Evaluate address and put it in HL
         # self.visit(node.address) -> result would be in register HL
         self.assembly_code.append(f"\tld hl, {hex(node.address.integer)}")
@@ -452,16 +503,16 @@ class CodeGenerator:
         # (このメソッドは visit_ArrayAccess と visit_Assignment で使用)
         var_name = node.var_node.value
         symbol = self.symbol_table.lookup(var_name)
-        
+
         self.assembly_code.append(f"; Calculate address for {var_name}[i]")
         # 1. インデックス`i`の値を評価 -> HL
         self.visit(node.index_expr)
-        
+
         # 2. 要素サイズを乗算 (i * element_size)
         #    int (2 bytes) の場合は HL = HL * 2 -> ADD HL, HL
         if symbol.type.value == 'int':
             self.assembly_code.append("\tadd hl, hl ; index *= 2")
-        
+
         # 3. ベースアドレスと加算
         #    HL = (base_addr) + (i * size)
         self.assembly_code.append("\tld de, (ix-...) ; Load base address offset")
@@ -469,13 +520,13 @@ class CodeGenerator:
         # 注: 実際には、IXからのオフセットをシンボルテーブルで管理し、
         #     IX + 計算済みオフセット のアドレスをHLに入れる必要がある。
         #     ここでは概念的なコードを示します。
-        
+
     def visit_UnaryOp(self, node: UnaryOp) -> None:
         if node.op.type == 'AMPERSAND':
             # &var の場合、varのアドレスをHLにロードする
             var_name = node.expr.value # 簡単のため、exprが変数名であると仮定
             symbol = self.symbol_table.lookup(var_name)
-            
+
             self.assembly_code.append(f"; Address of '{var_name}'")
             if symbol.scope == 'global':
                 self.assembly_code.append(f"\tld hl, {var_name}")
@@ -496,3 +547,9 @@ class CodeGenerator:
         self.assembly_code.append("\tinc hl")
         self.assembly_code.append("\tld d, (hl)   ; Load high byte")
         self.assembly_code.append("\tex de, hl")
+
+    def visit_StringLiteral(self, node: StringLiteral) -> None:
+        """文字列リテラルのアドレスをHLレジスタにロードするコードを生成"""
+        label = self._get_string_label(node.value)
+        self.assembly_code.append(f"; Load string literal address")
+        self.assembly_code.append(f"\tld hl, {label}")
