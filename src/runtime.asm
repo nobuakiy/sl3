@@ -1,4 +1,5 @@
 ; runtime.asm - StringBuffer Runtime Library
+;    .area _CODE(CODE)
 
 ; --- SB_APPEND ---
 ; StringBufferに文字列を追加する

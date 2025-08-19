@@ -112,28 +112,51 @@ class CodeGenerator:
         global_inits = []
         func_decls = []
         global_data_defs = []
+        const_defs = []
 
         for child in node.children:
             if isinstance(child, VarDecl):
-                # .ds定義を作成
+                # --- VarDecl (グローバル変数) の処理 ---
                 symbol = self.symbol_table.lookup(child.var_node.value)
-                element_size = self.get_symbol_size(symbol)
-                size = child.size * element_size if child.is_array else element_size
-                global_data_defs.append(f"{child.var_node.value}: .ds {size}")
-                # 初期化子があれば、実行コードとしてリストに追加
+                if symbol and isinstance(symbol, VariableSymbol):
+                    if symbol.is_const:
+                        # ★ constシンボルから値を取得してEQUを生成
+                        if hasattr(symbol, 'const_value'):
+                            const_defs.append(f"{symbol.name} = {symbol.const_value}")
+                    else:
+                        # constでなければデータ領域(.ds)を定義リストに追加
+                        element_size = self.get_symbol_size(symbol)
+                        size = child.size * element_size if child.is_array else element_size
+                        global_data_defs.append(f"{child.var_node.value}: .ds {size}")
+
+                # 初期化子があれば、初期化コード生成リストに追加
                 if child.initial_value:
                     global_inits.append(child)
+
             elif isinstance(child, FuncDecl):
+                # --- FuncDecl (関数) の処理 ---
                 func_decls.append(child)
 
-        # 3. コードセグメントの初期化
-        self.assembly_code.append("; --- Code Segment ---")
-        self.assembly_code.append(".area CODE(ABS,CSEG)")
 
+        # 定数定義
+        if len(const_defs) > 1:
+            self.assembly_code.append("\n; --- Constant Definitions ---")
+            self.assembly_code.extend(const_defs)
+
+        # 3. コードセグメントの初期化
+        # self.assembly_code.append("; --- Code Segment ---")
+        # self.assembly_code.append("\t.area CODE(ABS,CSEG)")
         # 2. 正しい順序でアセンブリコードを構築する
-        self.assembly_code.append(".org 0x100")
-        self.assembly_code.append("init:")
-        self.assembly_code.append("\tld sp, 0xFFFE")
+        # self.assembly_code.append(".org 0x100")
+        # self.assembly_code.append("init:")
+        # self.assembly_code.append("\tld sp, 0xFFFE")
+
+        self.assembly_code.append(f"\n.globl {self.entry_point}") # リンカ用にエントリーポイントを公開
+        self.assembly_code.append(f"{self.entry_point}:")
+        self.assembly_code.append("\tld sp, 0xFFFE ; (RAMの最上位などに設定)")
+        # TODO: グローバル変数の初期化コード (ROMからRAMへのデータコピー) をここに追加
+        self.assembly_code.append("\tcall main")
+        self.assembly_code.append("\thalt")
 
         if global_inits:
             self.assembly_code.append("\n; --- Global Variable Initializations ---")
@@ -150,6 +173,8 @@ class CodeGenerator:
         self.assembly_code.append("\n; --- Functions ---")
         for func_decl_node in func_decls:
             self.visit(func_decl_node)
+
+        self.assembly_code.append("\n\t.end init")
 
         # ★ visit_Programの最後に文字列リテラルのデータセグメントを追加
         if self.string_literals:
@@ -175,11 +200,10 @@ class CodeGenerator:
 
 
         self.assembly_code.append("\n; --- Data Segment ---")
-        self.assembly_code.append(".area DATA(ABS,DSEG)")
-        self.assembly_code.append(".org 0x8000")
+        self.assembly_code.append("\t.area _DATA(DATA)")
+        # self.assembly_code.append("\t.org 0x8000")
         self.assembly_code.extend(global_data_defs)
 
-        self.assembly_code.append("\n.end init")
 
 
     def visit_VarDecl(self, node):

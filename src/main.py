@@ -1,40 +1,71 @@
-from __future__ import annotations
-import sys
-from lexer import Lexer, Token
-from parser import Parser, AST
-from codegen import CodeGenerator
+import json
+import subprocess
+import os
+from lexer import Lexer
+from parser import Parser
 
-def main(source_file: str, output_file: str) -> None:
+# --- 動的インポートのための準備 ---
+CodeGenerator = None
+
+def main():
+    # --- 1. 設定ファイルの読み込み ---
+    config_file = 'config.json'
+    with open(config_file, 'r') as f:
+        config = json.load(f)
+
+    target = config.get("target", "z80").lower() # デフォルトはz80
+    source_file = "input.lang"
+
+    # --- 2. ターゲットに応じたCodeGeneratorの動的インポート ---
+    if target == 'z80':
+        from codegen_z80 import CodeGenerator
+        output_asm_file = "output.z80"
+        print(f"--- Target: Z80 ---")
+    elif target == '8086':
+        from codegen_8086 import CodeGenerator
+        output_asm_file = "output.asm"
+        print(f"--- Target: 8086 ---")
+    else:
+        raise ValueError(f"Unsupported target in {config_file}: {target}")
+
+    # --- 3. コンパイル処理 (これまでと同じ) ---
     with open(source_file, 'r', encoding='utf-8') as f:
-        source_code: str = f.read()
+        source_code = f.read()
+    source_lines = source_code.splitlines()
 
-    # ソースコードを行リストに分割
-    source_lines: list[str] = source_code.splitlines()
-
-    print("--- 1. Lexing ---")
     lexer = Lexer(source_code)
-    tokens: list[Token] = list(lexer.tokenize())
+    tokens = list(lexer.tokenize())
+    parser = Parser(iter(tokens), source_code)
+    ast = parser.parse()
 
-    print("--- 2. Parsing ---")
-    try:
-        # ソースコードの文字列をパーサーに渡す
-        parser = Parser(iter(tokens), source_code)
-        ast: AST = parser.parse()
-    except SyntaxError as e:
-        print(e) # 整形されたエラーメッセージを表示
-        return # コンパイルを中止
-
-    print("--- 3. Generating Code ---")
     generator = CodeGenerator()
-    assembly_code: str = generator.generate(ast, parser.symbol_table, source_lines)
+    assembly_code = generator.generate(ast, parser.symbol_table, source_lines)
 
-    with open(output_file, 'w') as f:
+    with open(output_asm_file, 'w') as f:
         f.write(assembly_code)
 
-    print(f"\n✅ Compilation successful! Assembly written to {output_file}")
+    print(f"✅ Assembly code generated: {output_asm_file}")
+
+    # --- 4. ターゲットに応じたビルド処理 ---
+    print(f"--- Building for {target.upper()} ---")
+    if target == 'z80':
+        # Z80用のビルドコマンド (asz80/aslink)
+        subprocess.run(["asz80", "-o", output_asm_file], check=True)
+        # ... aslinkのコマンド ...
+    elif target == '8086':
+        # 8086用のビルドコマンド (nasm/alink)
+        output_obj_file = "output.obj"
+        output_exe_file = "output.exe"
+        subprocess.run(["nasm", "-f", "obj", output_asm_file, "-o", output_obj_file], check=True)
+        # 複数のライブラリファイルもここで指定できる
+        link_args = ["alink", "-oEXE", output_obj_file, "PRINTF.obj", "PRINT.obj", "-entry", config["entry_point"]]
+        subprocess.run(link_args, check=True)
+
+    print(f"✅ Build successful! Executable created.")
 
 
 if __name__ == '__main__':
-    input_file = sys.argv[1] if len(sys.argv) > 1 else "input.lang"
-    output_file = sys.argv[2] if len(sys.argv) > 2 else "output.z80"
-    main(input_file, output_file)
+    try:
+        main()
+    except (SyntaxError, ValueError, FileNotFoundError, subprocess.CalledProcessError) as e:
+        print(f"\n--- ERROR ---\n{e}")
