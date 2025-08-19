@@ -70,7 +70,7 @@ class PortAccess(AST):
 
 # --- Parser ---
 class Parser:
-    # __init__, _error, advance, eat (変更なし)
+
     def __init__(self, tokens: Iterator[Token], source_code: str):
         self.tokens: Iterator[Token] = tokens
         self.current_token: Optional[Token] = None
@@ -78,10 +78,21 @@ class Parser:
         self.source_lines: list[str] = source_code.splitlines()
         self.advance(); self.advance()
         self.symbol_table: ScopedSymbolTable = ScopedSymbolTable()
+        self._register_builtins()
         self.precedence: dict[str, int] = {
             'EQ': 3, 'NE': 3, 'LT': 4, 'GT': 4, 'LE': 4, 'GE': 4,
             'PLUS': 5, 'MINUS': 5, 'MUL': 6, 'DIV': 6
         }
+
+    def _register_builtins(self):
+        """ライブラリ関数などを事前にシンボルテーブルに登録する"""
+        # void print(int s)
+        print_func = FunctionSymbol("print", Type(Token("VOID")), params=[]) # 引数の型チェックは簡略化
+        self.symbol_table.define(print_func)
+
+        # void printf(...)
+        printf_func = FunctionSymbol("printf", Type(Token("VOID")), params=[])
+        self.symbol_table.define(printf_func)
 
     def _error(self, message: str, token: Optional[Token] = None) -> NoReturn:
         token = token or self.current_token
@@ -255,12 +266,13 @@ class Parser:
 
     def parse_statement(self) -> AST:
         if not self.current_token: self._error("Unexpected end of file")
+
+        tok_type = self.current_token.type
         is_const = False
-        if self.current_token.type == 'CONST':
+        if tok_type == 'CONST':
             is_const = True
             self.eat('CONST')
 
-        tok_type = self.current_token.type
         if tok_type in ('INT', 'BYTE', 'STRINGBUFFER'):
             type_node = self.parse_type()
             name_token = self.current_token
@@ -270,8 +282,9 @@ class Parser:
         if is_const: # constの後ろに型名がなければエラー
             self._error("Expected a type specifier after 'const'")
 
-        if tok_type == 'ID' or tok_type == 'MEM' or tok_type == 'PORT':
-            return self.parse_assignment_or_call_statement()
+        if tok_type in ('ID', 'MEM', 'PORT', 'LPAREN'):
+            # 代入文または関数呼び出しの解析
+            return self.parse_expression_statement()
 
         if tok_type == 'FOR':
             return self.parse_for_in_statement()
@@ -282,75 +295,30 @@ class Parser:
         if tok_type == 'LBRACE': return self.parse_block_statement()
         self._error(f"Invalid statement starting with '{tok_type}'")
 
+    def parse_expression_statement(self) -> AST:
+        """代入文か、単独の(関数呼び出しなどの)文かを解析する"""
+        # まず、文の最初の部分を式として解析する
+        expr_node = self.parse_expression()
 
-    def parse_assignment_or_call_statement(self) -> AST:
-        left_node: AST
-
-        # --- 左辺 (lvalue) の解析 ---
-        if self.current_token and self.current_token.type == 'ID':
-            name_token = self.current_token
-            self.eat('ID')
-            left_node = VarAccess(name_token)
-        elif self.current_token and self.current_token.type == 'MEM':
-            mem_token = self.current_token
-            self.eat('MEM'); self.eat('LBRACKET')
-            addr_expr = self.parse_expression(); self.eat('RBRACKET')
-            left_node = MemAccess(addr_expr, mem_token)
-        elif self.current_token and self.current_token.type == 'PORT':
-            port_token = self.current_token
-            self.eat('PORT'); self.eat('LBRACKET')
-            addr_expr = self.parse_expression(); self.eat('RBRACKET')
-            left_node = PortAccess(addr_expr, port_token)
-        else:
-            self._error("Invalid start of a statement. Expected an identifier, MEM, or PORT.")
-
-        # --- 2. 左辺がさらに続くかチェック (. や [ があるか) ---
-        is_method_call = False
-        while self.current_token:
-            if self.current_token.type == 'LBRACKET': # 配列アクセス: x[...]
-                self.eat('LBRACKET'); index_expr = self.parse_expression(); self.eat('RBRACKET')
-                left_node = ArrayAccess(left_node, index_expr)
-
-            elif self.current_token.type == 'DOT': # ビット or メソッド: x.y
-                self.eat('DOT')
-                member_token = self.current_token
-
-                if self.peek_token and self.peek_token.type == 'LPAREN':
-                    # --- ★ ここからがメソッド呼び出しの解析ロジック ---
-                    self.eat('ID') # メソッド名を消費
-                    self.eat('LPAREN')
-                    args: list[AST] = []
-                    if self.current_token and self.current_token.type != 'RPAREN':
-                        args.append(self.parse_expression())
-                        while self.current_token and self.current_token.type == 'COMMA':
-                            self.eat('COMMA'); args.append(self.parse_expression())
-                    self.eat('RPAREN')
-                    left_node = MethodCall(left_node, member_token, args)
-                    is_method_call = True # メソッド呼び出しだったことを記録
-                    break # メソッド呼び出しは左辺の最後
-                else:
-                    # --- ビットアクセス ---
-                    bit_num_val = self._parse_const_integer()
-                    bit_num_token = Token('INTEGER', bit_num_val)
-                    left_node = BitAccess(left_node, bit_num_token)
-            else:
-                break # 左辺の解析終了
-
-        # --- 3. 代入文か、メソッド呼び出し文かを判断 ---
+        # 式の後に続くトークンで、文の種類を判断
         if self.current_token and self.current_token.type == 'ASSIGN':
-            if is_method_call:
-                self._error("Cannot assign to the result of a method call.", left_node.method_token)
-            # 代入文の解析
+            # --- 代入文の場合 ---
+            # 左辺が代入可能なものかチェック
+            if not isinstance(expr_node, (VarAccess, ArrayAccess, BitAccess, MemAccess, PortAccess)):
+                self._error("The left-hand side of an assignment must be a variable or memory location.")
+
             self.eat('ASSIGN')
             right_node = self.parse_expression()
             self.eat('SEMICOLON')
-            return Assignment(left_node, right_node)
-        elif is_method_call:
-            # メソッド呼び出し文の解析
-            self.eat('SEMICOLON')
-            return left_node
+            return Assignment(expr_node, right_node)
         else:
-            self._error("Expected an assignment operator '=' or a method call after the expression.")
+            # --- 単独の文 (関数呼び出しなど) の場合 ---
+            # 効果のない文 (例: "x + y;") をエラーにする
+            if not isinstance(expr_node, (FuncCall, MethodCall)):
+                self._error("This expression has no effect and is not a valid statement.")
+
+            self.eat('SEMICOLON')
+            return expr_node
 
     def parse_block_statement(self) -> Block:
         self.eat('LBRACE')
@@ -493,8 +461,8 @@ class Parser:
                     return BitAccess(VarAccess(name_token), bit_num_token)
 
             # 関数呼び出し
-            if self.peek_token and self.peek_token.type == 'LPAREN':
-                return self.parse_function_call()
+            if self.current_token and self.current_token.type == 'LPAREN':
+                return self.parse_function_call(name_token)
 
             # 配列アクセス
             if self.current_token and self.current_token.type == 'LBRACKET':
@@ -506,9 +474,14 @@ class Parser:
 
         self._error(f"Unexpected token in expression: {token}")
 
-    def parse_function_call(self) -> FuncCall:
-        name_token = self.current_token
-        self.eat('ID'); self.eat('LPAREN')
+    def parse_function_call(self, name_token) -> FuncCall:
+
+        # シンボルテーブルに関数として登録されているかチェック
+        symbol = self.symbol_table.lookup(name_token.value)
+        if not symbol or not isinstance(symbol, FunctionSymbol):
+            self._error(f"'{name_token.value}' is not a function or is not defined.", name_token)
+
+        self.eat('LPAREN')
         args: list[AST] = []
         if self.current_token and self.current_token.type != 'RPAREN':
             args.append(self.parse_expression())

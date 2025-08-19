@@ -3,7 +3,7 @@ from typing import Optional
 from symbol_table import ScopedSymbolTable, VariableSymbol, Symbol
 from parser import (AST, Program, VarDecl, Assignment, IfStatement, WhileStatement,
                     FuncDecl, FuncCall, ReturnStatement, Block, ArrayAccess, BinOp,
-                    Number, VarAccess, Type)
+                    Number, VarAccess, Type, StringLiteral)
 
 class CodeGenerator:
     def __init__(self) -> None:
@@ -55,22 +55,30 @@ class CodeGenerator:
                 self.last_commented_line = line_num
 
     def visit_Program(self, node: Program) -> None:
-        # 8086用のセグメント定義
+        # --- .dataセグメント (RAM) ---
         self.assembly_code.append("segment .data")
-        # グローバル変数の定義
         for child in node.children:
             if isinstance(child, VarDecl):
-                 symbol = self.symbol_table.lookup(child.var_node.value)
-                 if not symbol.is_const:
-                     size_directive = "dw" if symbol.type.value == 'int' else "db"
-                     self.assembly_code.append(f"{child.var_node.value} {size_directive} 0")
+                symbol = self.symbol_table.lookup(child.var_node.value)
+                if not symbol.is_const:
+                    # ★ 初期値がある場合はdw/dbで、ない場合はresw/resbで領域確保
+                    if child.initial_value and isinstance(child.initial_value, Number):
+                        size_directive = "dw" if symbol.type.value == 'int' else "db"
+                        self.assembly_code.append(f"\t{child.var_node.value} {size_directive} {child.initial_value.value}")
+                    else:
+                        size_directive = "resw 1" if symbol.type.value == 'int' else "resb 1"
+                        self.assembly_code.append(f"\t{child.var_node.value} {size_directive}")
 
+        # --- .textセグメント (ROM) ---
         self.assembly_code.append("\nsegment .text")
-        self.assembly_code.append("global main") # C言語のようにmainをエントリーポイントとする
+        self.assembly_code.append("\tglobal main")
 
         for child in node.children:
             if isinstance(child, FuncDecl):
                 self.visit(child)
+
+    def visit_VarDecl(self, node: VarDecl) -> None:
+        pass  # 変数宣言はProgramで処理済み
 
     def visit_FuncDecl(self, node: FuncDecl) -> None:
         func_name = node.name_token.value
@@ -149,15 +157,42 @@ class CodeGenerator:
             self.visit(node.expr) # 戻り値がAXに入る
         self.assembly_code.append(f"\tjmp .L_RET_{self.current_function_name}")
 
-    # visit_FuncCall は次のステップで特殊化する
     def visit_FuncCall(self, node: FuncCall) -> None:
         self._emit_source_comment(node)
         func_name = node.name_token.value
-        # (今は通常のスタック渡しのみ実装)
-        for arg in reversed(node.args):
-            self.visit(arg)
-            self.assembly_code.append("\tpush ax")
-        self.assembly_code.append(f"\tcall {func_name}")
-        # スタッククリーンアップ
-        if node.args:
-            self.assembly_code.append(f"\tadd sp, {len(node.args) * 2}")
+
+        # ★★★ print と printf のための特別処理 ★★★
+        if func_name in ("print", "printf"):
+            self.assembly_code.append(f"; Special call to sl_{func_name}")
+            # ライブラリの公開名 (sl_print, sl_printf) を呼び出す
+            self.assembly_code.append(f"\tcall sl_{func_name}")
+
+            # 第1引数は文字列リテラルでなければならない
+            if not node.args or not isinstance(node.args[0], StringLiteral):
+                self._error("First argument to 'print' or 'printf' must be a string literal.", node.name_token)
+
+            # CALLの直後に文字列を .db で配置
+            format_string = node.args[0].value
+            # NASMでは ` (バッククォート) を使うと\nなどを解釈してくれる
+            escaped_string = format_string.replace('\\n', '`, 10, `').replace('\\r', '`, 13, `')
+            self.assembly_code.append(f"\tdb `{escaped_string}`, 0")
+
+            # printfの場合、第2引数以降は変数のアドレスを .dd で配置
+            if func_name == "printf" and len(node.args) > 1:
+                for arg_node in node.args[1:]:
+                    if not isinstance(arg_node, VarAccess):
+                        self._error("Arguments to 'printf' after the format string must be variable names.", arg_node.token)
+                    self.assembly_code.append(f"\tdd {arg_node.value}")
+
+        else:
+            # --- 通常の関数呼び出し (スタック経由) ---
+            self.assembly_code.append(f"; Standard call to {func_name}")
+            if node.args:
+                for arg in reversed(node.args):
+                    self.visit(arg)
+                    self.assembly_code.append("\tpush ax")
+
+            self.assembly_code.append(f"\tcall {func_name}")
+
+            if node.args:
+                self.assembly_code.append(f"\tadd sp, {len(node.args) * 2}")
