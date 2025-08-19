@@ -1,0 +1,8 @@
+const int CTRL_PORT = 10;
+const int ENABLE_BIT = 3;
+
+int main() {
+    // ポート10のビット3を立てる
+    PORT[CTRL_PORT].ENABLE_BIT = 1;
+    int value = CTRL_PORT * 2 + 11;
+}

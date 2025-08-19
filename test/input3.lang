@@ -1,0 +1,17 @@
+const int ARRAY_SIZE = 16;
+const int ENABLE_BIT = 7;
+const int DATA_BIT = 0;
+
+byte status_reg;
+int data_buffer[ARRAY_SIZE]; // ★ constを配列サイズとして使用
+
+int main() {
+    // レジスタの有効化ビットを立てる
+    status_reg.ENABLE_BIT = 1; // ★ constをビット番号として使用
+
+    // データビットが立っているかチェック
+    if (status_reg.DATA_BIT == 1) {
+        return data_buffer[0];
+    }
+    return 0;
+}

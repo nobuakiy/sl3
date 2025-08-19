@@ -1,0 +1,9 @@
+int main() {
+    int x = 100;
+    int y = 25;
+    int z;
+
+    z = x * y; // z = 2500
+    z = z / 10; // z = 250
+    return z;
+}

@@ -1,0 +1,19 @@
+const int ARRAY_SIZE = 20;
+int data_buffer[ARRAY_SIZE]; // ★ constを配列サイズとして使用
+
+int main() {
+    byte local_buff[ARRAY_SIZE];
+
+    int ix = 1;
+    for data in data_buffer do {
+        data = ix;
+        ix = ix + 1;
+    }
+
+    ix = 1;
+    for data in local_buff do {
+        data = ix;
+        ix = ix + 1;
+    }
+    return 0;
+}

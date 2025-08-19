@@ -1,0 +1,10 @@
+int flags = 0;
+
+int main() {
+    // bit 7 と bit 1 をセット
+    flags.7 = 1;
+    flags.1 = 1;
+
+    // bit 7 をリセット
+    flags.7 = 0;
+}

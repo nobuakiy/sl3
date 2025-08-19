@@ -1,0 +1,6 @@
+StringBuffer sb[32];
+
+int main() {
+    sb.append("Hello");
+    sb.append(", World!");
+}
