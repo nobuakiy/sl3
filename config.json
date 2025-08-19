@@ -1,0 +1,9 @@
+{
+  "target": "8086",
+
+  "memory_map": {
+    "ROM": { "start": "0x0100" },
+    "RAM": { "start": "0x2000" }
+  },
+  "entry_point": "main"
+}
