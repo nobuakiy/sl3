@@ -8,3 +8,15 @@ wheels/
 
 # Virtual environments
 .venv
+bin/
+
+# assembly files
+output.*
+*.hlr
+*.map
+*.rel
+*.sym
+*.lst
+
+# temporary files
+error.txt

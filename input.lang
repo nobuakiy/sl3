@@ -1,4 +1,7 @@
+int x = 123;
+
 int main() {
-    int x = (100 + 20) * 2; // 本来は複雑な計算
-    return x;
+    print("Hello, 8086 world!\n");
+    printf("Value is: %d\n", x);
+    return 0;
 }
