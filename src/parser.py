@@ -2,6 +2,7 @@ from __future__ import annotations
 from typing import Iterator, Optional, NoReturn
 from lexer import Token
 from symbol_table import ScopedSymbolTable, VariableSymbol, FunctionSymbol, Symbol
+# from parser_nodes import * # ASTノードを別ファイルに分離したと仮定
 
 # --- AST Node Definitions (変更なし) ---
 class AST: pass
@@ -78,21 +79,42 @@ class Parser:
         self.source_lines: list[str] = source_code.splitlines()
         self.advance(); self.advance()
         self.symbol_table: ScopedSymbolTable = ScopedSymbolTable()
-        self._register_builtins()
+        # ★★★ ファイルから組み込み関数を登録するよう変更 ★★★
+        self._register_builtins_from_file("./src/stdlib.def")
         self.precedence: dict[str, int] = {
             'EQ': 3, 'NE': 3, 'LT': 4, 'GT': 4, 'LE': 4, 'GE': 4,
             'PLUS': 5, 'MINUS': 5, 'MUL': 6, 'DIV': 6
         }
 
-    def _register_builtins(self):
-        """ライブラリ関数などを事前にシンボルテーブルに登録する"""
-        # void print(int s)
-        print_func = FunctionSymbol("print", Type(Token("VOID")), params=[]) # 引数の型チェックは簡略化
-        self.symbol_table.define(print_func)
+    def _register_builtins_from_file(self, filename: str) -> None:
+        """定義ファイルからライブラリ関数を読み込み、シンボルテーブルに登録する"""
+        print(f"--- Loading library definitions from '{filename}' ---")
+        try:
+            with open(filename, 'r', encoding='utf-8') as f:
+                count = 0
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith('#'):
+                        continue # コメント行や空行はスキップ
 
-        # void printf(...)
-        printf_func = FunctionSymbol("printf", Type(Token("VOID")), params=[])
-        self.symbol_table.define(printf_func)
+                    parts = line.split()
+                    if len(parts) < 2: continue
+
+                    return_type, func_name, *arg_types = parts
+
+                    # 文字列の型名をトークンとTypeノードに変換
+                    # (大文字に変換してトークンタイプとする)
+                    return_type_node = Type(Token(return_type.upper(), return_type))
+
+                    # TODO: 引数の型リストも同様に作成
+                    params = []
+
+                    func_symbol = FunctionSymbol(func_name, return_type_node, params)
+                    self.symbol_table.define(func_symbol)
+                    count += 1
+            print(f"✅ Loaded {count} library functions.")
+        except FileNotFoundError:
+            print(f"⚠️ Warning: Library definition file '{filename}' not found. Skipping.")
 
     def _error(self, message: str, token: Optional[Token] = None) -> NoReturn:
         token = token or self.current_token

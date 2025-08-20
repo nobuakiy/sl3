@@ -1,0 +1,93 @@
+# UCR Standard Library - Function Definitions for Mini-Language Compiler
+
+# --- Character Input Routines ---
+byte getc
+byte getcstdin
+byte getcbios
+void setinadrs int
+int  getinadrs
+void pushinadrs int
+int  popinadrs
+int  gets
+void scanf string_literal ...
+
+# --- Character Output Routines ---
+void putc byte
+void putcr
+void putcstdout byte
+void putcbios byte
+int  getoutadrs
+void setoutadrs int
+void pushoutadrs int
+int  popoutadrs
+void puts int
+void puth byte
+void putw int
+void puti int
+void putu int
+void putl int ; Note: argument is 32-bit (DX:AX)
+void putul int ; Note: argument is 32-bit (DX:AX)
+void putisize int int ; Note: args are AX, CX
+void putusize int int ; Note: args are AX, CX
+void putlsize int int ; Note: args are DX:AX, CX
+void putulsize int int ; Note: args are DX:AX, CX
+void print string_literal
+void printf string_literal ...
+
+# --- Conversion Routines ---
+int atol int ; Note: returns 32-bit (DX:AX)
+int atoul int ; Note: returns 32-bit (DX:AX)
+int atou int
+int atoh int
+int atolh int ; Note: returns 32-bit (DX:AX)
+int atoi int
+int itoa int
+int utoa int
+int htoa byte
+int wtoa int
+int ltoa int ; Note: argument is 32-bit (DX:AX)
+int ultoa int ; Note: argument is 32-bit (DX:AX)
+int sprintf string_literal ...
+void bprintf int string_literal ...
+void sscanf int string_literal ...
+byte tolower byte
+byte toupper byte
+
+# --- Utility Routines ---
+int isize int
+int usize int
+int lsize int ; Note: argument is 32-bit (DX:AX)
+int ulsize int ; Note: argument is 32-bit (DX:AX)
+# (IsAlNum and other flag-based routines are tricky to represent here)
+
+# --- String Handling Routines ---
+int  strcpy int int
+int  strdup int
+int  strdupl string_literal
+int  strlen int
+void strcat int int
+int  strcat2 int int
+void strcatl int string_literal
+int  strcat2l int string_literal
+int  strchr int byte
+int  strstr int int
+int  strstrl int string_literal
+void strcmp int int
+void strcmpl int string_literal
+int  strupr int
+int  strupr2 int
+int  strlwr int
+int  strlwr2 int
+void strset int byte
+int  strset2 int byte
+
+# --- Memory Management Routines ---
+int  meminit int
+int  malloc int
+int  realloc int int
+void free int
+void dupptr int
+void isinheap int
+void isptr int
+
+# (Character set routines are omitted as they require a custom data type)
