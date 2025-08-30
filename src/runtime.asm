@@ -1,6 +1,8 @@
 ; runtime.asm - StringBuffer Runtime Library
 ;    .area _CODE(CODE)
 
+PUBLIC SB_APPEND,SB_LENGTH,MUL16,DIV16
+
 ; --- SB_APPEND ---
 ; StringBufferに文字列を追加する
 ; 入力:
@@ -112,5 +114,7 @@ DIV16:
     ld h, b
     ld l, c       ; Quotient in HL
     ret
+
+    END
 ; --- END OF FILE ---
 ; vim: set ts=4 sw=4 et:

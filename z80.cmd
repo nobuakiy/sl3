@@ -1,22 +1,10 @@
-.\bin\asez80.exe -l output.z80
-
 @echo off
 echo --- Assembling Files ---
 
-REM コンパイラが出力したメインプログラムをアセンブル
-.\bin\asz80 -o -l -s output.z80
+dotnet .\bin\N80.dll output.z80 .\build\output.rel -l
+dotnet .\bin\N80.dll .\src\runtime.asm .\build\runtime.rel -l
+dotnet .\bin\LK80.dll .\build\output.rel .\src\runtime.rel -of hex -y .\build\map.txt -yf equs -o .\build\output.hex
 
-REM ランタイムライブラリをアセンブル
-@REM .\bin\asz80 -o -l -s .\src\runtime.asm
-
-echo.
-echo --- Linking Files ---
-
-REM アセンブルして生成された.relファイルをリンクし、実行ファイル(.com)を生成
-@REM .\bin\aslink -m -i output.rel .\src\runtime.rel
-.\bin\aslink -m -i output.rel
-
-echo.
 echo --- Cleanup ---
 
 REM 不要になった中間ファイルを削除

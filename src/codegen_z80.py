@@ -147,17 +147,14 @@ class CodeGenerator:
         # self.assembly_code.append("; --- Code Segment ---")
         # self.assembly_code.append("\t.area CODE(ABS,CSEG)")
         # 2. 正しい順序でアセンブリコードを構築する
-        # self.assembly_code.append(".org 0x100")
-        # self.assembly_code.append("init:")
-        # self.assembly_code.append("\tld sp, 0xFFFE")
-
-        self.assembly_code.append(f"\n.globl {self.entry_point}") # リンカ用にエントリーポイントを公開
+        self.assembly_code.append("\tORG 0x0100")
+        self.assembly_code.append(f"\n\tPUBLIC\t{self.entry_point}") # リンカ用にエントリーポイントを公開
+        self.assembly_code.append("\tEXTERN SB_APPEND,SB_LENGTH,MUL16,DIV16")
         self.assembly_code.append(f"{self.entry_point}:")
         self.assembly_code.append("\tld sp, 0xFFFE ; (RAMの最上位などに設定)")
         # TODO: グローバル変数の初期化コード (ROMからRAMへのデータコピー) をここに追加
-        self.assembly_code.append("\tcall main")
-        self.assembly_code.append("\thalt")
 
+        # 4. グローバル変数の初期化
         if global_inits:
             self.assembly_code.append("\n; --- Global Variable Initializations ---")
             for var_decl_node in global_inits:
@@ -167,9 +164,7 @@ class CodeGenerator:
         self.assembly_code.append("\tcall main")
         self.assembly_code.append("\thalt")
 
-        self.assembly_code.append("\n; --- include runtime ---")
-        self.assembly_code.append("\t.include /src\\runtime.asm/")
-
+        # ★ 関数定義のコードを追加
         self.assembly_code.append("\n; --- Functions ---")
         for func_decl_node in func_decls:
             self.visit(func_decl_node)
@@ -200,8 +195,8 @@ class CodeGenerator:
 
 
         self.assembly_code.append("\n; --- Data Segment ---")
-        self.assembly_code.append("\t.area _DATA(DATA)")
-        # self.assembly_code.append("\t.org 0x8000")
+        # self.assembly_code.append("\t.area _DATA(DATA)")
+        self.assembly_code.append("\t.org 0x8000")
         self.assembly_code.extend(global_data_defs)
 
 
@@ -217,8 +212,10 @@ class CodeGenerator:
             assignment_node = Assignment(left=VarAccess(node.var_node), right=node.initial_value)
             self.visit(assignment_node)
 
+
     def visit_FuncDecl(self, node: FuncDecl) -> None:
         func_name = node.name_token.value
+        self.current_function_name = func_name
         self.assembly_code.append(f"\n; --- Function: {func_name} ---")
         self.assembly_code.append(f"{func_name}:")
 
@@ -227,42 +224,51 @@ class CodeGenerator:
         self.assembly_code.append("\tld ix, 0")
         self.assembly_code.append("\tadd ix, sp")
 
-        # ★ ASTノードからローカル変数の情報を取得し、スタック領域を確保
-        local_var_size = 0
-        local_var_offset = 0
-        for symbol in node.local_symbols.values():
+        # --- ★★★ ローカル変数と配列の領域確保ロジック (修正) ★★★ ---
+        total_local_size = 0
+        current_offset = 0
+
+        # 一貫したレイアウトのためシンボルをソート
+        sorted_symbols = sorted(node.local_symbols.items())
+
+        for name, symbol in sorted_symbols:
             if isinstance(symbol, VariableSymbol):
-                size = self.get_symbol_size(symbol)
-                local_var_size += size
-                local_var_offset -= size
-                symbol.offset = local_var_offset # オフセット情報をシンボルに記録
+                element_size = self.get_symbol_size(symbol)
+                num_elements = symbol.size if symbol.is_array else 1
+                symbol_size = num_elements * element_size
 
-        if local_var_size > 0:
-            self.assembly_code.append(f"\tld hl, {local_var_size}")
-            self.assembly_code.append("\tand a") # clear carry
+                # この変数のオフセットを計算して記録 (スタックは下に伸びるので負のオフセット)
+                current_offset -= symbol_size
+                symbol.offset = current_offset
+
+                total_local_size += symbol_size
+
+        # 計算した合計サイズ分、スタックポインタを下に移動
+        if total_local_size > 0:
+            self.assembly_code.append(f"; Allocate {total_local_size} bytes for local variables")
+            self.assembly_code.append(f"\tld hl, {total_local_size}")
+            self.assembly_code.append("\tand a ; clear carry for subtraction")
             self.assembly_code.append("\tsbc hl, sp")
-            self.assembly_code.append("\tld sp, hl ; Allocate space for local vars")
+            self.assembly_code.append("\tld sp, hl")
 
-        # ★ コード生成の前に、現在のスコープにローカル変数を追加
+        # ★★★ ここまでが修正箇所 ★★★
+
         self.symbol_table.enter_scope()
         for name, symbol in node.local_symbols.items():
             self.symbol_table.define(symbol)
-
-        # ★ 現在処理中の関数名を保存しておく
-        self.current_function_name = func_name
 
         # --- 本体 ---
         self.visit(node.body)
 
         # --- エピローグ ---
-        # ★ 予測可能なラベル名（.L_RET_{関数名}）を使用
         self.assembly_code.append(f".L_RET_{func_name}:")
-        self.assembly_code.append("\tld sp, ix")
+        self.assembly_code.append("\tld sp, ix") # ローカル変数領域を破棄
         self.assembly_code.append("\tpop ix")
         self.assembly_code.append("\tret")
 
         self.symbol_table.leave_scope()
-        self.current_function_name = None # 処理が終わったらクリア
+        self.current_function_name = None
+
 
     def visit_FuncCall(self, node: FuncCall) -> None:
         # ★ node.name.value を node.name_token.value に修正

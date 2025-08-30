@@ -50,8 +50,11 @@ def main():
     print(f"--- Building for {target.upper()} ---")
     if target == 'z80':
         # Z80用のビルドコマンド (asz80/aslink)
-        subprocess.run(["asz80", "-o", output_asm_file], check=True)
+        params = f"dotnet .\\bin\\N80.dll {output_asm_file} .\\build\\main.rel -l -ie utf-8 -le utf-8 -se shift_jis".split(" ")
+        subprocess.run(params, check=True)
         # ... aslinkのコマンド ...
+        params = f"dotnet .\\bin\\LK80.dll .\\build\\main.rel .\\build\\runtime.rel -of hex -y map.txt -yf equs -o main.hex".split(" ")
+        subprocess.run(params, check=True)
     elif target == '8086':
         # 8086用のビルドコマンド (nasm/alink)
         output_obj_file = "output.obj"
