@@ -1,219 +1,243 @@
-はい、承知いたしました。C言語風の型指定方法に変更したBNFを以下に提案します。
+# SL3 BNF
 
-`var`キーワードを廃止し、型名を先に記述するスタイルに変更しました。これにより、変数、定数、関数の宣言がよりC言語に近い、馴染みのある構文になります。
+この文書は、現在の実装に近い形で SL3 の構文を整理したものです。
+理想仕様ではなく、主に [src/parser.py](src/parser.py) と [src/lexer.py](src/lexer.py) に基づいています。
 
+## 概要
 
------
+SL3 は C 風の宣言構文を持つ小さな言語です。
+トップレベルには変数宣言、定数宣言、関数定義を並べられます。
 
+現在の実装には次の特徴があります。
 
-### 1\. プログラム全体構造
+- 基本型は `int`、`byte`、`void`、`StringBuffer`
+- 文はブロック単位で記述する
+- `if`、`while`、`for ... in ... do`、`return` をサポート
+- `MEM[...]` と `PORT[...]` によるアクセスをサポート
+- 式の二項演算子は現状 `==`、`!=`、`<`、`>`、`<=`、`>=`、`+`、`-`、`*`、`/` のみ
+- 単項演算子として `&` をサポート
 
-プログラムは、インポート文、グローバル宣言（定数、変数）、そして関数定義の集まりで構成されます。
+## プログラム構造
 
 ```bnf
-<program> ::= <program_statement>*
+<program> ::= <top_level_declaration>*
 
-<program_statement> ::= <import_statement>
-                      | <declaration>
-                      | <function_declaration>
+<top_level_declaration> ::= <const_variable_declaration>
+                          | <variable_declaration>
+                          | <function_declaration>
 ```
 
------
-
-
-### 2\. トップレベル文
-
-**インポート文** 📦
-他のモジュールを読み込みます。
+## 宣言
 
 ```bnf
-<import_statement> ::= 'import' <IDENTIFIER> ';'
+<const_variable_declaration> ::= "const" <type_specifier> <identifier> <array_suffix>? "=" <expression> ";"
+
+<variable_declaration> ::= <type_specifier> <identifier> <array_suffix>? <initializer>? ";"
+
+<initializer> ::= "=" <expression>
+
+<array_suffix> ::= "[" <const_integer> "]"
+
+<function_declaration> ::= <type_specifier> <identifier> "(" <parameter_list>? ")" <block>
+
+<parameter_list> ::= <parameter> ( "," <parameter> )*
+
+<parameter> ::= <type_specifier> <identifier>
+
+<type_specifier> ::= "int"
+                   | "byte"
+                   | "void"
+                   | "StringBuffer"
 ```
 
-**宣言文** 宣言は、定数、変数、または関数定義です。トップレベル（グローバル）にも、関数内（ローカル）にも記述できます。
+補足:
+
+- 配列サイズには整数リテラルか `const` 変数を使えます。
+- `const` 変数は初期化必須です。
+- `const` は変数宣言にのみ付けられ、関数宣言には付けられません。
+- 引数宣言には現状、配列表記はありません。
+
+## 文
 
 ```bnf
-<declaration> ::= <const_declaration>
-                | <variable_declaration>
-```
-
-**定数宣言** 📝
-C言語と同様に `const <型> <名前> = <値>;` の形式になります。
-
-```bnf
-<const_declaration> ::= 'const' <type_specifier> <UPPERCASE_IDENTIFIER> ('[' ']')? '=' <expression> ';'
-```
-
-  * `const int MAX_VALUE = 65535;`
-  * `const byte KEY_MAP[] = [0, 1, 2, 3];`  // 配列定数。サイズは初期化子から推論される
-
-
-**変数宣言** 💾
-`var`キーワードがなくなり、型名から宣言を始めます。配列のサイズは変数名の後に指定します。
-
-```bnf
-<variable_declaration> ::= <type_specifier> <IDENTIFIER> ('[' <expression> ']')? ('=' <expression>)? ';'
-```
-
-  * `byte counter;`
-  * `int buffer[16];`
-  * `StringBuffer name_buffer[32];` // 32要素のStringBuffer配列
-
-**関数宣言** 🔧
-`func`キーワードと`->`を廃止し、戻り値の型を関数名の前に置きます。引数もC言語と同じ `型名 仮引数名` の順序です。
-
-```bnf
-<function_declaration> ::= <type_specifier> <IDENTIFIER> '(' <parameter_list>? ')' <block_statement>
-
-<parameter_list> ::= <parameter> (',' <parameter>)*
-<parameter>      ::= <type_specifier> <IDENTIFIER> ('[' ']')?
-```
-
-  * `int add(int a, int b) { return a + b; }`
-  * `void setup_display() { /* ... */ }`
-  * `void process_data(byte data_array[]) { /* ... */ }`
-
------
-
-### 3\. 型指定子 (変更点)
-
-型の指定は、基本型、`StringBuffer`、または`void`のみを指すように単純化されます。配列の指定は各宣言の識別子部分に移動しました。
-
-```bnf
-<type_specifier> ::= 'void' | <base_type> | 'StringBuffer'
-
-<base_type> ::= 'int' | 'byte'
-```
-
-  * **`void`** を追加し、値を返さない関数の戻り値の型として使用します。
-  * 配列を示す `[ ]` の記述はここから削除されました。
-
------
-
-### 4\. 文 (Statements)
-
-関数や制御構文の本体を構成する個々の命令です。
-
-```bnf
-<statement> ::= <declaration>
-              | <assignment_statement>
+<statement> ::= <const_variable_declaration>
+              | <variable_declaration>
               | <expression_statement>
               | <if_statement>
-              | <for_statement>
               | <while_statement>
+              | <for_in_statement>
               | <return_statement>
-              | <block_statement>
+              | <block>
 
-<block_statement> ::= '{' <statement>* '}'
+<block> ::= "{" <statement>* "}"
+
+<expression_statement> ::= <assignment_statement>
+                         | <call_statement>
+
+<assignment_statement> ::= <assignable> "=" <expression> ";"
+
+<call_statement> ::= <call_expression> ";"
+
+<if_statement> ::= "if" "(" <expression> ")" <block> <else_clause>?
+
+<else_clause> ::= "else" <block>
+
+<while_statement> ::= "while" "(" <expression> ")" <block>
+
+<for_in_statement> ::= "for" <identifier> "in" <expression> "do" <block>
+
+<return_statement> ::= "return" <expression> ";"
 ```
 
-**代入文**
+補足:
+
+- 代入演算子は現状 `=` のみです。
+- 単独文として許される式は、関数呼び出しかメソッド呼び出しだけです。
+- `return;` のような値なし return は現状の実装では不可です。
+- `else if` は専用構文を持たず、必要なら `else { if (...) { ... } }` と書きます。
+
+## 式
 
 ```bnf
-<assignment_statement> ::= <lvalue> <assignment_operator> <expression> ';'
-<assignment_operator>  ::= '=' | '+=' | '-=' | '*=' | '/=' | '&=' | '|=' | '^=' | '<<=' | '>>='
+<expression> ::= <equality_expression>
+
+<equality_expression> ::= <relational_expression>
+                        | <equality_expression> "==" <relational_expression>
+                        | <equality_expression> "!=" <relational_expression>
+
+<relational_expression> ::= <additive_expression>
+                          | <relational_expression> "<" <additive_expression>
+                          | <relational_expression> ">" <additive_expression>
+                          | <relational_expression> "<=" <additive_expression>
+                          | <relational_expression> ">=" <additive_expression>
+
+<additive_expression> ::= <multiplicative_expression>
+                        | <additive_expression> "+" <multiplicative_expression>
+                        | <additive_expression> "-" <multiplicative_expression>
+
+<multiplicative_expression> ::= <unary_expression>
+                              | <multiplicative_expression> "*" <unary_expression>
+                              | <multiplicative_expression> "/" <unary_expression>
+
+<unary_expression> ::= "&" <unary_expression>
+                     | <primary_expression>
 ```
 
-**式文**
-関数呼び出しなど、評価結果を捨てる式です。
+演算子優先順位は次の順です。
+
+1. 単項 `&`
+2. `*` `/`
+3. `+` `-`
+4. `<` `>` `<=` `>=`
+5. `==` `!=`
+
+補足:
+
+- `&&`、`||`、`!`、`|`、`^`、`<<`、`>>` などのトークンは現状の parser では式として扱っていません。
+- 単項 `-` も現状の parser では未対応です。
+
+## 一次式
 
 ```bnf
-<expression_statement> ::= <expression> ';'
+<primary_expression> ::= "(" <expression> ")"
+                       | <integer>
+                       | <string>
+                       | <mem_access>
+                       | <port_access>
+                       | <identifier_expression>
+
+<mem_access> ::= "MEM" "[" <expression> "]"
+
+<port_access> ::= "PORT" "[" <expression> "]"
+
+<identifier_expression> ::= <function_call>
+                          | <method_call>
+                          | <bit_access>
+                          | <array_access>
+                          | <variable_access>
+
+<function_call> ::= <identifier> "(" <argument_list>? ")"
+
+<method_call> ::= <identifier> "." <identifier> <method_arguments>?
+
+<method_arguments> ::= "(" <argument_list>? ")"
+
+<bit_access> ::= <identifier> "." <const_integer>
+
+<array_access> ::= <identifier> "[" <expression> "]"
+
+<variable_access> ::= <identifier>
+
+<argument_list> ::= <expression> ( "," <expression> )*
 ```
 
-**if文**
-C言語と同様の `if-else` 構文です。
+補足:
+
+- メソッド呼び出しは `obj.method` と `obj.method(...)` の両方を parser が受理します。
+- `a[0].method()` や `a[0].3` のような連鎖は現状の parser では扱っていません。
+- `MEM[...]` と `PORT[...]` は式としても代入先としても使えます。
+- ビットアクセスのビット番号には整数リテラルか `const` 変数を使えます。
+
+## 代入可能な左辺
 
 ```bnf
-<if_statement> ::= 'if' <expression> <block_statement> ('else' <block_statement>)?
+<assignable> ::= <variable_access>
+               | <array_access>
+               | <bit_access>
+               | <mem_access>
+               | <port_access>
+
+<call_expression> ::= <function_call>
+                    | <method_call>
 ```
 
-**for文 (for-in-do)**
-指定された構文の`for`ループです。
+## 終端記号
 
 ```bnf
-<for_statement> ::= 'for' <IDENTIFIER> 'in' <expression> 'do' <block_statement>
+<identifier> ::= <letter_or_underscore> <identifier_char>*
+
+<identifier_char> ::= <letter_or_underscore>
+                    | <digit>
+
+<letter_or_underscore> ::= "a" | ... | "z" | "A" | ... | "Z" | "_"
+
+<integer> ::= <decimal_integer> | <hex_integer>
+
+<decimal_integer> ::= <digit>+
+
+<hex_integer> ::= "0x" <hex_digit>+
+
+<string> ::= '"' <string_char>* '"'
 ```
 
-**while文**
-標準的な`while`ループです。
+字句上の予約語は次のとおりです。
 
-```bnf
-<while_statement> ::= 'while' <expression> <block_statement>
-```
+- `const`
+- `int`
+- `byte`
+- `void`
+- `if`
+- `else`
+- `while`
+- `return`
+- `for`
+- `in`
+- `do`
+- `MEM`
+- `PORT`
+- `StringBuffer`
 
-**return文**
-関数から値を返します。
+## 実装との差分を避けるための注意
 
-```bnf
-<return_statement> ::= 'return' <expression>? ';'
-```
+この文書は、将来の理想仕様ではなく現在の実装に寄せています。
+そのため、一般的な C 風言語から期待しやすい次の機能は、今のところ使えないか、文法として未完成です。
 
------
+- `import` 文
+- 配列リテラル
+- 複合代入演算子
+- 論理演算子 `&&`、`||`、`!`
+- ビット演算子 `|`、`^`、シフト演算子
+- 引数なし `return`
+- 多次元配列アクセスや式の連鎖
 
-### 5\. 式 (Expressions)
-
-値を生成するすべての構文です。演算子の優先順位に従って定義します。
-
-```bnf
-<expression> ::= <logic_or_expr>
-
-<logic_or_expr>  ::= <logic_and_expr> ('||' <logic_and_expr>)*
-<logic_and_expr> ::= <bitwise_or_expr> ('&&' <bitwise_or_expr>)*
-<bitwise_or_expr>  ::= <bitwise_xor_expr> ('|' <bitwise_xor_expr>)*
-<bitwise_xor_expr> ::= <bitwise_and_expr> ('^' <bitwise_and_expr>)*
-<bitwise_and_expr> ::= <equality_expr> ('&' <equality_expr>)*
-<equality_expr>  ::= <relational_expr> (('==' | '!=') <relational_expr>)*
-<relational_expr>::= <shift_expr> (('<' | '>' | '<=' | '>=') <shift_expr>)*
-<shift_expr>     ::= <additive_expr> (('<<' | '>>') <additive_expr>)*
-<additive_expr>  ::= <multiplicative_expr> (('+' | '-') <multiplicative_expr>)*
-<multiplicative_expr> ::= <unary_expr> (('*' | '/') <unary_expr>)*
-
-<unary_expr> ::= ('-' | '!' | '&') <unary_expr>
-               | <primary_expr>
-```
-
-  * `&` はアドレス取得演算子です。
-
-**一次式 (Primary Expressions)**
-式を構成する最も基本的な要素です。
-
-```bnf
-<primary_expr> ::= <lvalue>
-                 | <literal>
-                 | <array_literal>
-                 | <function_call>
-                 | '(' <expression> ')'
-
-<lvalue> ::= <IDENTIFIER>
-           | <lvalue> '[' <expression> ']'   // 配列アクセス: a[i]
-           | <lvalue> '.' <INTEGER>          // ビットアクセス: a.3
-           | 'MEM' '[' <expression> ']'    // メモリ直接アクセス: MEM[0x8000]
-
-<function_call> ::= <IDENTIFIER> '(' <argument_list>? ')'
-<argument_list> ::= <expression> (',' <expression>)*
-```
-
-**リテラル**
-ソースコードに直接記述される値です。
-
-```bnf
-<literal> ::= <INTEGER> | <STRING>
-
-<array_literal> ::= '[' <argument_list>? ']'
-```
-
-### 6\. 終端記号 (Terminals)
-
-これ以上分解できない、語彙要素です。
-
-```bnf
-<IDENTIFIER>           ::= [a-z_][a-zA-Z0-9_]*
-<UPPERCASE_IDENTIFIER> ::= [A-Z_][A-Z0-9_]*
-<INTEGER>              ::= [1-9][0-9]* | '0' | '0x'[0-9a-fA-F]+
-<STRING>               ::= '"' ( [^"] )* '"'
-```
-
------
-
-このBNFは、指定された言語仕様を網羅し、パーサーを実装するための強固な基盤となるでしょう。特に、`lvalue`の定義により、配列要素 (`a[i]`) や特定ビット (`var.3`)、直接メモリアドレス (`MEM[addr]`) に対して、統一的な方法で値の読み書き（代入）が可能になるように設計されています。
+文法を拡張した場合は、まず [src/parser.py](src/parser.py) と [src/lexer.py](src/lexer.py) の挙動を更新し、その後でこの文書を合わせて更新してください。
