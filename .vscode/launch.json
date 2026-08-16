@@ -5,7 +5,7 @@
       "request": "launch",
       "name": "Launch Program",
       "program": "${workspaceFolder}/src/main.py",
-      "args": [ "${workspaceFolder}/input.lang" ],
+      "args": [ "${workspaceFolder}\\test\\input7.lang" ],
       "cwd": "${workspaceFolder}"
     }
   ]

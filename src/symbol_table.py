@@ -42,8 +42,10 @@ class ScopedSymbolTable:
     def define(self, symbol: Symbol) -> None:
         self.scopes[-1][symbol.name] = symbol
 
-    def lookup(self, name: str) -> Optional[Symbol]:
+    def lookup(self, name: str, current_scope_only=False) -> Optional[Symbol]:
         for scope in reversed(self.scopes):
             if name in scope:
                 return scope[name]
+            if current_scope_only:
+                break
         return None

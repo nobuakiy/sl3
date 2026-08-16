@@ -1,7 +1,8 @@
 from __future__ import annotations
 from typing import Optional
+from lexer import Token
 from symbol_table import ScopedSymbolTable, VariableSymbol, Symbol
-from parser import (AST, Program, VarDecl, Assignment, IfStatement, WhileStatement,
+from parser import (AST, Type, Program, VarDecl, Assignment, IfStatement, WhileStatement,
                     FuncDecl, FuncCall, ReturnStatement, Block, ArrayAccess, BinOp,
                     Number, VarAccess, Type, StringLiteral)
 
@@ -124,6 +125,9 @@ class CodeGenerator:
     def visit_VarAccess(self, node: VarAccess) -> None:
         var_name = node.value
         symbol = self.symbol_table.lookup(var_name)
+        if symbol is None:
+            self.assembly_code.append(f"; ERROR: symbol '{var_name}' not found")
+            raise Exception(f"Undefined variable: {var_name}")
         size_directive = "word" if symbol.type.value == 'int' else "byte"
 
         if symbol.scope == 'global':
@@ -151,6 +155,104 @@ class CodeGenerator:
         for stmt in node.statements:
             self.visit(stmt)
 
+    
+    def visit_IfStatement(self, node: IfStatement) -> None:
+        """
+        IfStatementノードの処理:
+        if 条件:
+            ...then_block...
+        else:
+            ...else_block...
+        """
+        self._emit_source_comment(node)
+        else_label = self.new_label()
+        end_label = self.new_label()
+
+        # 条件式の評価（結果はAXに入ると仮定）
+        self.visit(node.condition)
+        self.assembly_code.append("\tcmp ax, 0")
+        self.assembly_code.append(f"\tje {else_label}")
+
+        # thenブロック
+        self.visit(node.then_block)
+        self.assembly_code.append(f"\tjmp {end_label}")
+
+        # elseブロック
+        self.assembly_code.append(f"{else_label}:")
+        if node.else_block:
+            self.visit(node.else_block)
+
+        self.assembly_code.append(f"{end_label}:")
+
+    def visit_WhileStatement(self, node: WhileStatement) -> None:
+        """
+        WhileStatementノードの処理:
+        while 条件:
+            ...body...
+        """
+        self._emit_source_comment(node)
+        start_label = self.new_label()
+        end_label = self.new_label()
+
+        self.assembly_code.append(f"{start_label}:")
+        self.visit(node.condition)
+        self.assembly_code.append("\tcmp ax, 0")
+        self.assembly_code.append(f"\tje {end_label}")
+
+        self.visit(node.body)
+        self.assembly_code.append(f"\tjmp {start_label}")
+        self.assembly_code.append(f"{end_label}:")
+
+    def visit_ForInStatement(self, node) -> None:
+        """
+        ForInStatementノードの処理:
+        for var in array:
+            ...body...
+        """
+        self._emit_source_comment(node)
+        loop_var = node.item_token.value
+        array_name = node.array_node.value
+
+        # ループインデックス用一時変数名
+        index_var_name = f"__for_index_{loop_var}"
+
+        # シンボルテーブルにインデックス変数を追加（なければ）
+        if not self.symbol_table.lookup(index_var_name, current_scope_only=True):
+            # int型のダミートークンを生成
+            int_token = Token('INT', 'int', line=0, column=0)
+            offset = -2  # 例: bp-2（既存ローカル変数のオフセット管理に合わせて調整）
+            index_symbol = VariableSymbol(index_var_name, Type(int_token), 'local', offset, size=2, is_const=False)
+            self.symbol_table.define(index_symbol)
+
+        index_symbol = self.symbol_table.lookup(index_var_name)
+        index_offset = index_symbol.offset
+
+        # ループ用ラベル
+        start_label = self.new_label()
+        end_label = self.new_label()
+
+        # ループインデックス初期化
+        self.assembly_code.append(f"\tmov word [bp{index_offset:+}], 0")
+
+        self.assembly_code.append(f"{start_label}:")
+        # 配列サイズチェック
+        self.assembly_code.append(f"\tmov ax, word [bp{index_offset:+}]")
+        self.assembly_code.append(f"\tcmp ax, {array_name}_size")
+        self.assembly_code.append(f"\tjge {end_label}")
+
+        # ループ変数に配列要素を代入
+        self.assembly_code.append(f"\tmov bx, word [bp{index_offset:+}]")
+        self.assembly_code.append(f"\tmov ax, [{array_name} + bx*2]")  # int型配列の場合
+        self.assembly_code.append(f"\tmov word [bp{index_offset:+}], ax")
+
+        # ループ本体
+        self.visit(node.body)
+
+        # インデックス++
+        self.assembly_code.append(f"\tinc word [bp{index_offset:+}]")
+        self.assembly_code.append(f"\tjmp {start_label}")
+        self.assembly_code.append(f"{end_label}:")
+        
     def visit_ReturnStatement(self, node: ReturnStatement) -> None:
         self._emit_source_comment(node)
         if node.expr:

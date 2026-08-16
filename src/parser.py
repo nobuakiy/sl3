@@ -7,54 +7,72 @@ from symbol_table import ScopedSymbolTable, VariableSymbol, FunctionSymbol, Symb
 # --- AST Node Definitions (変更なし) ---
 class AST: pass
 class Program(AST):
-    def __init__(self, children: list[AST]): self.children: list[AST] = children
+    def __init__(self, children: list[AST]):
+        self.children: list[AST] = children
 class VarDecl(AST):
     def __init__(self, type_node: Type, var_node: Token, initial_value: Optional[AST] = None, is_array: bool = False, size: int = 0):
         self.type_node, self.var_node, self.initial_value = type_node, var_node, initial_value
         self.is_array, self.size = is_array, size
 class Assignment(AST):
-    def __init__(self, left: AST, right: AST): self.left, self.right = left, right
+    def __init__(self, left: AST, right: AST):
+        self.left, self.right = left, right
 class IfStatement(AST):
     def __init__(self, condition: AST, then_block: Block, else_block: Optional[Block] = None):
         self.condition, self.then_block, self.else_block = condition, then_block, else_block
 class WhileStatement(AST):
-    def __init__(self, condition: AST, body: Block): self.condition, self.body = condition, body
-class FuncDecl(AST):
-    def __init__(self, return_type: Type, name_token: Token, params: list[Param], body: Block):
-        self.return_type, self.name_token, self.params, self.body = return_type, name_token, params, body
-        self.local_symbols: dict[str, Symbol] = {} # ★ ローカルシンボルを保存する辞書を追加
-class FuncCall(AST):
-    def __init__(self, name_token: Token, args: list[AST]): self.name_token, self.args = name_token, args
-class ReturnStatement(AST):
-    def __init__(self, expr: AST): self.expr: AST = expr
-class Block(AST):
-    def __init__(self, statements: list[AST]): self.statements: list[AST] = statements
-class ArrayAccess(AST):
-    def __init__(self, var_node: VarAccess, index_expr: AST): self.var_node, self.index_expr = var_node, index_expr
-class UnaryOp(AST):
-    def __init__(self, op: Token, expr: AST): self.op, self.expr = op, expr
-class MemAccess(AST):
-    def __init__(self, address_expr: AST): self.address_expr: AST = address_expr
-class BinOp(AST):
-    def __init__(self, left: AST, op: Token, right: AST): self.left, self.op, self.right = left, op, right
-class Number(AST):
-    def __init__(self, token: Token): self.token, self.value = token, token.value
-class VarAccess(AST):
-    def __init__(self, token: Token): self.token, self.value = token, token.value
-class Type(AST):
-    def __init__(self, token: Token): self.token, self.value = token, token.value
-class Param(AST):
-    def __init__(self, type_node: Type, var_node: Token): self.type_node, self.var_node = type_node, var_node
-class StringLiteral(AST):
-    def __init__(self, token: Token):
-        self.token: Token = token
-        self.value: str = token.value
+    def __init__(self, condition: AST, body: Block):
+        self.condition, self.body = condition, body
 class ForInStatement(AST):
     def __init__(self, item_token: Token, array_node: AST, body: Block):
         self.item_token = item_token
         self.array_node = array_node
         self.body = body
         self.local_symbols: dict[str, Symbol] = {} # ループ変数用のスコープ
+class FuncDecl(AST):
+    def __init__(self, return_type: Type, name_token: Token, params: list[Param], body: Block):
+        self.return_type, self.name_token, self.params, self.body = return_type, name_token, params, body
+        self.local_symbols: dict[str, Symbol] = {} # ★ ローカルシンボルを保存する辞書を追加
+class FuncCall(AST):
+    def __init__(self, name_token: Token, args: list[AST]):
+        self.name_token, self.args = name_token, args
+class ReturnStatement(AST):
+    def __init__(self, expr: AST):
+        self.expr: AST = expr
+class Block(AST):
+    def __init__(self, statements: list[AST]):
+        self.statements: list[AST] = statements
+class ArrayAccess(AST):
+    def __init__(self, var_node: VarAccess, index_expr: AST):
+        self.var_node, self.index_expr = var_node, index_expr
+class UnaryOp(AST):
+    def __init__(self, op: Token, expr: AST):
+        self.op, self.expr = op, expr
+class MemAccess(AST):
+    def __init__(self, address_expr: AST):
+        self.address_expr: AST = address_expr
+class PortAccess(AST):
+    def __init__(self, address_expr: AST, token: Token):
+        self.address_expr: AST = address_expr
+        self.token: Token = token # エラー報告用にトークンを保持
+class BinOp(AST):
+    def __init__(self, left: AST, op: Token, right: AST):
+        self.left, self.op, self.right = left, op, right
+class Number(AST):
+    def __init__(self, token: Token):
+        self.token, self.value = token, token.value
+class VarAccess(AST):
+    def __init__(self, token: Token):
+        self.token, self.value = token, token.value
+class Type(AST):
+    def __init__(self, token: Token):
+        self.token, self.value = token, token.value
+class Param(AST):
+    def __init__(self, type_node: Type, var_node: Token):
+        self.type_node, self.var_node = type_node, var_node
+class StringLiteral(AST):
+    def __init__(self, token: Token):
+        self.token: Token = token
+        self.value: str = token.value
 class BitAccess(AST):
     def __init__(self, var_node: VarAccess, bit_num_token: Token):
         self.var_node = var_node
@@ -64,10 +82,7 @@ class MethodCall(AST):
         self.var_node = var_node
         self.method_token = method_token
         self.args = args
-class PortAccess(AST):
-    def __init__(self, address_expr: AST, token: Token):
-        self.address_expr: AST = address_expr
-        self.token: Token = token # エラー報告用にトークンを保持
+
 
 # --- Parser ---
 class Parser:

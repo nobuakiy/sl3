@@ -1,6 +1,8 @@
+
 import json
 import subprocess
 import os
+import sys
 from lexer import Lexer
 from parser import Parser
 
@@ -13,10 +15,14 @@ def main():
     with open(config_file, 'r') as f:
         config = json.load(f)
 
-    target = config.get("target", "z80").lower() # デフォルトはz80
-    source_file = "input.lang"
+    # --- 入力ファイルの指定（コマンドライン引数） ---
+    if len(sys.argv) > 1:
+        source_file = sys.argv[1]
+    else:
+        source_file = "input.lang"
 
     # --- 2. ターゲットに応じたCodeGeneratorの動的インポート ---
+    target = config.get("target", "z80").lower() # デフォルトはz80
     if target == 'z80':
         from codegen_z80 import CodeGenerator
         output_asm_file = "output.z80"
