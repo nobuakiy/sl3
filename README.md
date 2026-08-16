@@ -14,7 +14,8 @@ Python で字句解析、構文解析、コード生成を行い、現在は 808
 
 ## 必要環境
 
-- Python 3.13 以上
+- Python 3.14 以上
+- uv
 - ターゲット別の外部ツール
 
 8086 を使う場合:
@@ -32,28 +33,35 @@ Z80 を使う場合:
 
 ## セットアップ
 
-仮想環境を使う場合の一例です。
+このリポジトリは uv を前提にしています。
 
 ```powershell
-python -m venv .venv
+uv venv --python 3.14 .venv
+uv sync
 .\.venv\Scripts\Activate.ps1
 ```
 
-依存パッケージは現時点では特にありません。
+依存パッケージは現時点では特にありませんが、`uv sync` を実行して `pyproject.toml` と `uv.lock` を同期した状態にしておく運用を想定しています。
 
 ## 使い方
 
 リポジトリのルートで実行します。
 
 ```powershell
-python .\src\main.py
+uv run python .\src\main.py
 ```
 
 引数を省略した場合は `input.lang` を入力として使います。
 ファイルを指定する場合は次のように実行します。
 
 ```powershell
-python .\src\main.py .\test\sample.sl3
+uv run python .\src\main.py .\test\sample.sl3
+```
+
+既に仮想環境を有効化している場合は、次の実行でも構いません。
+
+```powershell
+.\.venv\Scripts\python.exe .\src\main.py .\test\sample.sl3
 ```
 
 ## 設定ファイル
