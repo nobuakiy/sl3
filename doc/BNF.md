@@ -84,7 +84,7 @@ SL3 は C 風の宣言構文を持つ小さな言語です。
 
 <while_statement> ::= "while" "(" <expression> ")" <block>
 
-<for_in_statement> ::= "for" <identifier> "in" <expression> "do" <block>
+<for_in_statement> ::= "for" <identifier> "in" <identifier> "do" <block>
 
 <return_statement> ::= "return" <expression> ";"
 ```
@@ -95,6 +95,10 @@ SL3 は C 風の宣言構文を持つ小さな言語です。
 - 単独文として許される式は、関数呼び出しかメソッド呼び出しだけです。
 - `return;` のような値なし return は現状の実装では不可です。
 - `else if` は専用構文を持たず、必要なら `else { if (...) { ... } }` と書きます。
+- `for` の `in` の後ろに書けるのは、既に宣言済みの配列変数の識別子だけです。実装上は
+  一般の式パーサーを経由しますが、結果を無条件に変数アクセスとして扱っているため、
+  配列変数の識別子以外(関数呼び出しの結果や配列要素など)を渡すと、構文エラーではなく
+  未処理の例外で終了します。
 
 ## 式
 
@@ -133,7 +137,8 @@ SL3 は C 風の宣言構文を持つ小さな言語です。
 
 補足:
 
-- `&&`、`||`、`!`、`|`、`^`、`<<`、`>>` などのトークンは現状の parser では式として扱っていません。
+- `&&`、`||`、`!`、`<<`、`>>` は字句解析(lexer.py)の時点でトークンとして存在しません。
+- `|`(PIPE)と`^`(CARET)は字句解析ではトークン化されますが、構文解析側では式として使われていません。
 - 単項 `-` も現状の parser では未対応です。
 
 ## 一次式
@@ -148,7 +153,9 @@ SL3 は C 風の宣言構文を持つ小さな言語です。
 
 <mem_access> ::= "MEM" "[" <expression> "]"
 
-<port_access> ::= "PORT" "[" <expression> "]"
+<port_access> ::= "PORT" "[" <expression> "]" <port_bit_suffix>?
+
+<port_bit_suffix> ::= "." <const_integer>
 
 <identifier_expression> ::= <function_call>
                           | <method_call>
@@ -158,7 +165,7 @@ SL3 は C 風の宣言構文を持つ小さな言語です。
 
 <function_call> ::= <identifier> "(" <argument_list>? ")"
 
-<method_call> ::= <identifier> "." <identifier> <method_arguments>?
+<method_call> ::= <identifier> "." <identifier> <method_arguments>
 
 <method_arguments> ::= "(" <argument_list>? ")"
 
@@ -173,7 +180,11 @@ SL3 は C 風の宣言構文を持つ小さな言語です。
 
 補足:
 
-- メソッド呼び出しは `obj.method` と `obj.method(...)` の両方を parser が受理します。
+- メソッド呼び出しは括弧が必須で、`obj.method(...)` の形でのみ受理されます。
+  `obj.method` のように括弧を省略すると、ビットアクセス構文として解釈されようとして
+  エラーになります(引数リスト自体の省略、つまり `obj.method()` は可能です)。
+- `PORT[...]` は `PORT[addr].bit` の形でビットアクセスもできます。
+  ただし `MEM[...]` には同様のビットアクセス構文はありません。
 - `a[0].method()` や `a[0].3` のような連鎖は現状の parser では扱っていません。
 - `MEM[...]` と `PORT[...]` は式としても代入先としても使えます。
 - ビットアクセスのビット番号には整数リテラルか `const` 変数を使えます。
