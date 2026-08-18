@@ -1,4 +1,5 @@
 from __future__ import annotations
+from typing import Optional, NoReturn, cast
 from symbol_table import ScopedSymbolTable, VariableSymbol, Symbol
 from parser import (AST, Program, VarDecl, Assignment, IfStatement, WhileStatement,
                     FuncDecl, FuncCall, ReturnStatement, Block, ArrayAccess, BinOp,
@@ -25,17 +26,22 @@ class CodeGenerator:
 
     def _get_start_line(self, node: AST) -> int:
         """ASTノードからソースの開始行番号を取得するヘルパー"""
-        if hasattr(node, 'token'):
-            return node.token.line
-        if hasattr(node, 'name_token'):
-            return node.name_token.line
-        if hasattr(node, 'start_token'): # 今後、明示的に開始トークンを持たせる場合
-            return node.start_token.line
+        token = getattr(node, 'token', None)
+        if token is not None:
+            return token.line
+        name_token = getattr(node, 'name_token', None)
+        if name_token is not None:
+            return name_token.line
+        start_token = getattr(node, 'start_token', None) # 今後、明示的に開始トークンを持たせる場合
+        if start_token is not None:
+            return start_token.line
         # 再帰的に左端のトークンを探す
-        if hasattr(node, 'left'):
-            return self._get_start_line(node.left)
-        if hasattr(node, 'var_node'):
-            return self._get_start_line(node.var_node)
+        left = getattr(node, 'left', None)
+        if left is not None:
+            return self._get_start_line(left)
+        var_node = getattr(node, 'var_node', None)
+        if var_node is not None:
+            return self._get_start_line(var_node)
         # フォールバック
         return -1
 
@@ -65,12 +71,14 @@ class CodeGenerator:
     def get_symbol_size(self, symbol: Symbol) -> int:
         """シンボルの型からサイズ(バイト)を取得する"""
         if isinstance(symbol, VariableSymbol):
+            assert symbol.type is not None
             if symbol.type.value == 'int': return 2
             if symbol.type.value == 'byte': return 1
         return 2 # 不明な場合はデフォルトでint
 
     def _get_element_address_in_hl(self, node: ArrayAccess) -> None:
         """配列要素の最終的なメモリアドレスを計算し、HLレジスタに格納する"""
+        assert self.symbol_table is not None
         var_name = node.var_node.value
         symbol = self.symbol_table.lookup(var_name)
 
@@ -107,7 +115,7 @@ class CodeGenerator:
     def generic_visit(self, node: AST) -> None:
         raise NotImplementedError(f"No visit_{type(node).__name__} method")
 
-    def _error(self, message: str, token=None) -> None:
+    def _error(self, message: str, token=None) -> NoReturn:
         location = f" (line {token.line}, column {token.column})" if token else ""
         raise Exception(f"Code generation error{location}: {message}")
 
@@ -220,6 +228,7 @@ class CodeGenerator:
 
 
     def visit_FuncDecl(self, node: FuncDecl) -> None:
+        assert self.symbol_table is not None
         func_name = node.name_token.value
         self.current_function_name = func_name
         self.assembly_code.append(f"\n; --- Function: {func_name} ---")
@@ -309,7 +318,10 @@ class CodeGenerator:
         self._get_element_address_in_hl(node)
 
         # 2. HLが指すアドレスから値をロード
+        assert self.symbol_table is not None
         symbol = self.symbol_table.lookup(node.var_node.value)
+        if not symbol or not isinstance(symbol, VariableSymbol):
+            self._error(f"'{node.var_node.value}' is not a valid variable", node.var_node.token)
         self.assembly_code.append("; Load value from calculated address")
         if self.get_symbol_size(symbol) == 2: # int
             self.assembly_code.append("\tld e, (hl)")
@@ -355,9 +367,13 @@ class CodeGenerator:
     def visit_BitAccess(self, node: BitAccess) -> None:
         """ビットを読み出し(テストし)、結果(0か1)をHLに格納する"""
         self._emit_source_comment(node)
-        var_name = node.var_node.value
+        assert self.symbol_table is not None
+        var_node = cast(VarAccess, node.var_node)
+        var_name = var_node.value
         bit_num = node.bit_num_token.value
         symbol = self.symbol_table.lookup(var_name)
+        if not symbol or not isinstance(symbol, VariableSymbol):
+            self._error(f"'{var_name}' is not a valid variable", var_node.token)
 
         self.assembly_code.append(f"; Test bit {bit_num} of '{var_name}'")
         # 変数の下位バイトをAレジスタにロード
@@ -379,7 +395,7 @@ class CodeGenerator:
         """ポートから1バイト読み出し、結果をHLに格納する"""
         self._emit_source_comment(node)
         # 簡単のため、アドレスはコンパイル時定数と仮定
-        port_addr = node.address_expr.value
+        port_addr = cast(Number, node.address_expr).value
         self.assembly_code.append(f"; Read from PORT[{port_addr}]")
         self.assembly_code.append(f"\tin a, ({port_addr})")
         self.assembly_code.append("\tld h, 0")
@@ -387,10 +403,11 @@ class CodeGenerator:
 
     def visit_Assignment(self, node: Assignment) -> None:
         self._emit_source_comment(node)
+        assert self.symbol_table is not None
 
         if isinstance(node.left, PortAccess):
             # --- ポートへの代入: PORT[addr] = value ---
-            port_addr = node.left.address_expr.value
+            port_addr = cast(Number, node.left.address_expr).value
             self.visit(node.right) # 右辺を評価 -> HL
             self.assembly_code.append(f"; Write to PORT[{port_addr}]")
             self.assembly_code.append("\tld a, l ; Truncate to 8-bit")
@@ -398,9 +415,9 @@ class CodeGenerator:
 
         elif isinstance(node.left, BitAccess) and isinstance(node.left.var_node, PortAccess):
             # --- ポートのビットへの代入: PORT[addr].bit = value ---
-            port_addr = node.left.var_node.address_expr.value
+            port_addr = cast(Number, node.left.var_node.address_expr).value
             bit_num = node.left.bit_num_token.value
-            value = node.right.value
+            value = cast(Number, node.right).value
 
             self.assembly_code.append(f"; Read-Modify-Write to PORT[{port_addr}].{bit_num}")
             # 1. Read
@@ -415,14 +432,17 @@ class CodeGenerator:
 
         elif isinstance(node.left, BitAccess):
             # --- ビットへの代入 ---
-            var_name = node.left.var_node.value
+            var_node = cast(VarAccess, node.left.var_node)
+            var_name = var_node.value
             bit_num = node.left.bit_num_token.value
             symbol = self.symbol_table.lookup(var_name)
+            if not symbol or not isinstance(symbol, VariableSymbol):
+                self._error(f"'{var_name}' is not a valid variable", var_node.token)
 
             self.assembly_code.append(f"; Assign to bit {bit_num} of '{var_name}'")
             # 右辺の値(0か1)を評価
             # (簡単のため、ここではリテラル0か1のみをサポート)
-            value = node.right.value
+            value = cast(Number, node.right).value
 
             # 変数の下位バイトをAレジスタにロード
             if symbol.scope == 'global':
@@ -500,6 +520,8 @@ class CodeGenerator:
                 self.assembly_code.append("\tpop de")
                 # 4. DEの値をHLが指すアドレスにストア
                 symbol = self.symbol_table.lookup(node.left.var_node.value)
+                if not symbol or not isinstance(symbol, VariableSymbol):
+                    self._error(f"'{node.left.var_node.value}' is not a valid variable", node.left.var_node.token)
                 if self.get_symbol_size(symbol) == 2: # int
                     self.assembly_code.append("\tld (hl), e")
                     self.assembly_code.append("\tinc hl")
@@ -590,6 +612,7 @@ class CodeGenerator:
 
     def _try_fold_expression(self, node: AST) -> Optional[int]:
         """式ASTノードを再帰的に評価し、定数に畳み込めるならその値を返す"""
+        assert self.symbol_table is not None
         if isinstance(node, Number):
             return node.value
 
@@ -699,10 +722,14 @@ class CodeGenerator:
         self.assembly_code.append(f"\tld (hl), a ; MEM[addr] = value")
 
     def visit_UnaryOp(self, node: UnaryOp) -> None:
+        assert self.symbol_table is not None
         if node.op.type == 'AMPERSAND':
             # &var の場合、varのアドレスをHLにロードする
-            var_name = node.expr.value # 簡単のため、exprが変数名であると仮定
+            var_node = cast(VarAccess, node.expr) # 簡単のため、exprが変数名であると仮定
+            var_name = var_node.value
             symbol = self.symbol_table.lookup(var_name)
+            if not symbol or not isinstance(symbol, VariableSymbol):
+                self._error(f"'{var_name}' is not a valid variable", var_node.token)
 
             self.assembly_code.append(f"; Address of '{var_name}'")
             if symbol.scope == 'global':
@@ -733,13 +760,18 @@ class CodeGenerator:
 
     def visit_ForInStatement(self, node: ForInStatement) -> None:
         self._emit_source_comment(node)
+        assert self.symbol_table is not None
 
-        array_name = node.array_node.value
+        array_name = cast(VarAccess, node.array_node).value
         array_symbol = self.symbol_table.lookup(array_name)
+        if not array_symbol or not isinstance(array_symbol, VariableSymbol):
+            self._error(f"'{array_name}' is not a valid array", node.item_token)
         item_name = node.item_token.value
 
         # ループ変数'item'のオフセットを取得
         item_symbol = node.local_symbols[item_name]
+        if not isinstance(item_symbol, VariableSymbol):
+            self._error(f"'{item_name}' is not a valid variable", node.item_token)
         item_offset = item_symbol.offset
 
         loop_start_label = self.new_label()

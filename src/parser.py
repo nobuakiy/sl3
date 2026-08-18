@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Iterator, Optional, NoReturn
+from typing import Iterator, Optional, NoReturn, cast
 from lexer import Token
 from symbol_table import ScopedSymbolTable, VariableSymbol, FunctionSymbol, Symbol
 # from parser_nodes import * # ASTノードを別ファイルに分離したと仮定
@@ -172,6 +172,7 @@ class Parser:
 
         type_node = self.parse_type()
         name_token = self.current_token
+        assert name_token is not None
         self.eat('ID')
 
         if self.current_token and self.current_token.type == 'LPAREN':
@@ -200,7 +201,9 @@ class Parser:
             initial_value = self.parse_expression()
             if is_const:
                 # ★ const変数の初期値は整数リテラルまたはconst変数のみ許可
-                if not isinstance(initial_value, Number) and not (isinstance(initial_value, VarAccess) and initial_value.token.value in self.symbol_table.constants):
+                ref_symbol = self.symbol_table.lookup(initial_value.token.value) if isinstance(initial_value, VarAccess) else None
+                is_const_ref = isinstance(ref_symbol, VariableSymbol) and ref_symbol.is_const
+                if not isinstance(initial_value, Number) and not is_const_ref:
                     self._error(f"Constant variable '{name_token.value}' must be initialized with a constant expression", name_token)
                 else:
                     # 初期値が整数リテラルまたはconst変数の場合、値を保存
@@ -220,6 +223,7 @@ class Parser:
     def _parse_const_integer(self) -> int:
         """定数として扱える整数値（リテラルまたはconst変数）を解析して返す"""
         token = self.current_token
+        assert token is not None
         if token.type == 'INTEGER':
             self.advance()
             return token.value
@@ -234,7 +238,7 @@ class Parser:
 
                 # --- 仮実装 ---
                 # シンボルテーブルに定数の値を保存するよう拡張したと仮定
-                if hasattr(symbol, 'const_value'):
+                if symbol.const_value is not None:
                     self.advance()
                     return symbol.const_value
                 else:
@@ -288,6 +292,7 @@ class Parser:
         # 最初の引数
         type_node = self.parse_type()
         var_token = self.current_token
+        assert var_token is not None
         self.eat('ID')
         params.append(Param(type_node, var_token))
 
@@ -296,6 +301,7 @@ class Parser:
             self.eat('COMMA')
             type_node = self.parse_type()
             var_token = self.current_token
+            assert var_token is not None
             self.eat('ID')
             params.append(Param(type_node, var_token))
 
@@ -367,6 +373,7 @@ class Parser:
 
     def parse_assignment_statement(self) -> Assignment:
         name_token = self.current_token
+        assert name_token is not None
         self.eat('ID');
         left_node: AST = VarAccess(name_token)
         if self.current_token and self.current_token.type == 'LBRACKET':
@@ -536,18 +543,21 @@ class Parser:
     def parse_for_in_statement(self) -> ForInStatement:
         self.eat('FOR')
         item_token = self.current_token
+        assert item_token is not None
         self.eat('ID')
         self.eat('IN')
         array_node = self.parse_expression()
+        array_var = cast(VarAccess, array_node) # 簡単のため変数ノードと仮定
         self.eat('DO')
 
         # forループ専用のスコープに入る
         self.symbol_table.enter_scope()
 
         # ループ変数をシンボルとして登録 (型は配列の要素型から推論)
-        array_symbol = self.symbol_table.lookup(array_node.value) # 簡単のため変数ノードと仮定
-        if not array_symbol or not array_symbol.is_array:
-            self._error(f"'{array_node.value}' is not an array and cannot be iterated", array_node.token)
+        array_symbol = self.symbol_table.lookup(array_var.value)
+        if not array_symbol or not isinstance(array_symbol, VariableSymbol) or not array_symbol.is_array:
+            self._error(f"'{array_var.value}' is not an array and cannot be iterated", array_var.token)
+        assert array_symbol.type is not None
 
         # item変数の型は配列の型と同じ
         item_symbol = VariableSymbol(item_token.value, array_symbol.type, 'local')

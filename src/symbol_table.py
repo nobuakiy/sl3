@@ -1,5 +1,8 @@
 from __future__ import annotations
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from parser import Type, Param
 
 class Symbol:
     """すべてのシンボルの基底クラス"""

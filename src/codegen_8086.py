@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Optional
+from typing import Optional, NoReturn, cast
 from lexer import Token
 from symbol_table import ScopedSymbolTable, VariableSymbol, Symbol
 from parser import (AST, Type, Program, VarDecl, Assignment, IfStatement, WhileStatement,
@@ -28,6 +28,7 @@ class CodeGenerator:
 
     def get_symbol_size(self, symbol: Symbol) -> int:
         if isinstance(symbol, VariableSymbol):
+            assert symbol.type is not None
             if symbol.type.value == 'int': return 2  # word
             if symbol.type.value == 'byte': return 1 # byte
         return 2
@@ -40,11 +41,19 @@ class CodeGenerator:
     def generic_visit(self, node: AST) -> None:
         raise NotImplementedError(f"No visit_{type(node).__name__} method")
 
+    def _error(self, message: str, token: Optional[Token] = None) -> NoReturn:
+        location = f" (line {token.line}, column {token.column})" if token else ""
+        raise Exception(f"Code generation error{location}: {message}")
+
     def _get_start_line(self, node: AST) -> int:
-        if hasattr(node, 'token'): return node.token.line
-        if hasattr(node, 'name_token'): return node.name_token.line
-        if hasattr(node, 'var_node'): return self._get_start_line(node.var_node)
-        if hasattr(node, 'left'): return self._get_start_line(node.left)
+        token = getattr(node, 'token', None)
+        if token is not None: return token.line
+        name_token = getattr(node, 'name_token', None)
+        if name_token is not None: return name_token.line
+        var_node = getattr(node, 'var_node', None)
+        if var_node is not None: return self._get_start_line(var_node)
+        left = getattr(node, 'left', None)
+        if left is not None: return self._get_start_line(left)
         return -1
 
     def _emit_source_comment(self, node: AST) -> None:
@@ -56,12 +65,16 @@ class CodeGenerator:
                 self.last_commented_line = line_num
 
     def visit_Program(self, node: Program) -> None:
+        assert self.symbol_table is not None
         # --- .dataセグメント (RAM) ---
         self.assembly_code.append("segment .data")
         for child in node.children:
             if isinstance(child, VarDecl):
                 symbol = self.symbol_table.lookup(child.var_node.value)
+                if not symbol or not isinstance(symbol, VariableSymbol):
+                    self._error(f"'{child.var_node.value}' is not a valid variable")
                 if not symbol.is_const:
+                    assert symbol.type is not None
                     # ★ 初期値がある場合はdw/dbで、ない場合はresw/resbで領域確保
                     if child.initial_value and isinstance(child.initial_value, Number):
                         size_directive = "dw" if symbol.type.value == 'int' else "db"
@@ -82,6 +95,7 @@ class CodeGenerator:
         pass  # 変数宣言はProgramで処理済み
 
     def visit_FuncDecl(self, node: FuncDecl) -> None:
+        assert self.symbol_table is not None
         func_name = node.name_token.value
         self.current_function_name = func_name
         self.assembly_code.append(f"\n; --- Function: {func_name} ---")
@@ -126,11 +140,13 @@ class CodeGenerator:
         self.assembly_code.append(f"\tmov ax, {node.value}")
 
     def visit_VarAccess(self, node: VarAccess) -> None:
+        assert self.symbol_table is not None
         var_name = node.value
         symbol = self.symbol_table.lookup(var_name)
-        if symbol is None:
+        if symbol is None or not isinstance(symbol, VariableSymbol):
             self.assembly_code.append(f"; ERROR: symbol '{var_name}' not found")
             raise Exception(f"Undefined variable: {var_name}")
+        assert symbol.type is not None
         size_directive = "word" if symbol.type.value == 'int' else "byte"
 
         if symbol.scope == 'global':
@@ -139,9 +155,10 @@ class CodeGenerator:
             self.assembly_code.append(f"\tmov ax, {size_directive} [bp{symbol.offset:+}]")
 
     def visit_ArrayAccess(self, node: ArrayAccess) -> None:
+        assert self.symbol_table is not None
         var_name = node.var_node.value
         symbol = self.symbol_table.lookup(var_name)
-        if symbol is None:
+        if symbol is None or not isinstance(symbol, VariableSymbol):
             raise Exception(f"Undefined variable: {var_name}")
 
         self.visit(node.index_expr) # インデックスがAXに入る
@@ -171,12 +188,16 @@ class CodeGenerator:
 
     def visit_Assignment(self, node: Assignment) -> None:
         self._emit_source_comment(node)
+        assert self.symbol_table is not None
         self.visit(node.right) # 結果がAXに入る
 
         left_node = node.left
         if isinstance(left_node, VarAccess):
             var_name = left_node.value
             symbol = self.symbol_table.lookup(var_name)
+            if symbol is None or not isinstance(symbol, VariableSymbol):
+                self._error(f"'{var_name}' is not a valid variable", left_node.token)
+            assert symbol.type is not None
             size_directive = "word" if symbol.type.value == 'int' else "byte"
             reg = "ax" if size_directive == "word" else "al"
 
@@ -205,6 +226,8 @@ class CodeGenerator:
             elif isinstance(base, VarAccess):
                 var_name = base.value
                 symbol = self.symbol_table.lookup(var_name)
+                if symbol is None or not isinstance(symbol, VariableSymbol):
+                    self._error(f"'{var_name}' is not a valid variable", base.token)
                 if symbol.scope == 'global':
                     self.assembly_code.append(f"\tmov [{var_name}], al")
                 else: # local
@@ -269,6 +292,7 @@ class CodeGenerator:
             ...body...
         """
         self._emit_source_comment(node)
+        assert self.symbol_table is not None
         loop_var = node.item_token.value
         array_name = node.array_node.value
 
@@ -287,6 +311,7 @@ class CodeGenerator:
             self.symbol_table.define(index_symbol)
 
         index_symbol = self.symbol_table.lookup(index_var_name)
+        assert index_symbol is not None and isinstance(index_symbol, VariableSymbol)
         index_offset = index_symbol.offset
 
         # ループ用ラベル
@@ -337,9 +362,10 @@ class CodeGenerator:
             # 第1引数は文字列リテラルでなければならない
             if not node.args or not isinstance(node.args[0], StringLiteral):
                 self._error("First argument to 'print' or 'printf' must be a string literal.", node.name_token)
+            first_arg = cast(StringLiteral, node.args[0])
 
             # CALLの直後に文字列を .db で配置
-            format_string = node.args[0].value
+            format_string = first_arg.value
             # NASMでは ` (バッククォート) を使うと\nなどを解釈してくれる
             escaped_string = format_string.replace('\\n', '`, 10, `').replace('\\r', '`, 13, `')
             self.assembly_code.append(f"\tdb `{escaped_string}`, 0")
@@ -348,7 +374,7 @@ class CodeGenerator:
             if func_name == "printf" and len(node.args) > 1:
                 for arg_node in node.args[1:]:
                     if not isinstance(arg_node, VarAccess):
-                        self._error("Arguments to 'printf' after the format string must be variable names.", arg_node.token)
+                        self._error("Arguments to 'printf' after the format string must be variable names.", getattr(arg_node, 'token', None))
                     self.assembly_code.append(f"\tdd {arg_node.value}")
 
         else:
@@ -367,9 +393,10 @@ class CodeGenerator:
     def visit_MethodCall(self, node: MethodCall) -> None:
         """StringBuffer 等のメソッド呼び出し。現状は StringBuffer.append のみ対応する最小実装。"""
         self._emit_source_comment(node)
+        assert self.symbol_table is not None
         obj_name = node.var_node.value
         symbol = self.symbol_table.lookup(obj_name)
-        if symbol is None:
+        if symbol is None or not isinstance(symbol, VariableSymbol):
             raise Exception(f"Undefined variable: {obj_name}")
 
         method_name = node.method_token.value

@@ -56,7 +56,8 @@ class Lexer:
         line_num: int = 1
         line_start: int = 0
         for mo in re.finditer(self.token_regex, self.code):
-            kind: str = mo.lastgroup
+            kind = mo.lastgroup
+            assert kind is not None
             value: str | int = mo.group()
             column: int = mo.start() - line_start
 
