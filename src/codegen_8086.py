@@ -189,10 +189,10 @@ class CodeGenerator:
     def visit_Assignment(self, node: Assignment) -> None:
         self._emit_source_comment(node)
         assert self.symbol_table is not None
-        self.visit(node.right) # 結果がAXに入る
 
         left_node = node.left
         if isinstance(left_node, VarAccess):
+            self.visit(node.right) # 結果がAXに入る
             var_name = left_node.value
             symbol = self.symbol_table.lookup(var_name)
             if symbol is None or not isinstance(symbol, VariableSymbol):
@@ -207,19 +207,16 @@ class CodeGenerator:
                 self.assembly_code.append(f"\tmov {size_directive} [bp{symbol.offset:+}], {reg}")
 
         elif isinstance(left_node, BitAccess):
-            # 右辺値(0/非0)を退避してから、元の値にビットを立てる/クリアする
+            # 右辺値はコンパイル時定数の0/1のみサポート (z80版と同じ前提)。
+            # 実行時分岐なしで、or/andのどちらを出力するかをコンパイル時に決められる。
             mask = 1 << left_node.bit_num_token.value
+            value = cast(Number, node.right).value
             base = left_node.var_node
-            self.assembly_code.append("\tmov cx, ax")
             self._emit_read_bit_base(base)
-            clear_label, end_label = self.new_label(), self.new_label()
-            self.assembly_code.append("\tcmp cx, 0")
-            self.assembly_code.append(f"\tje {clear_label}")
-            self.assembly_code.append(f"\tor al, {mask}")
-            self.assembly_code.append(f"\tjmp {end_label}")
-            self.assembly_code.append(f"{clear_label}:")
-            self.assembly_code.append(f"\tand al, {(~mask) & 0xFF}")
-            self.assembly_code.append(f"{end_label}:")
+            if value == 1:
+                self.assembly_code.append(f"\tor al, {mask}")
+            else:
+                self.assembly_code.append(f"\tand al, {(~mask) & 0xFF}")
 
             if isinstance(base, PortAccess):
                 self.assembly_code.append("\tout dx, al")
