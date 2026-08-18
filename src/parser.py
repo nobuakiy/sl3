@@ -74,7 +74,7 @@ class StringLiteral(AST):
         self.token: Token = token
         self.value: str = token.value
 class BitAccess(AST):
-    def __init__(self, var_node: VarAccess, bit_num_token: Token):
+    def __init__(self, var_node: AST, bit_num_token: Token):
         self.var_node = var_node
         self.bit_num_token = bit_num_token
 class MethodCall(AST):
@@ -465,7 +465,14 @@ class Parser:
             self.eat('PORT'); self.eat('LBRACKET')
             addr_expr = self.parse_expression()
             self.eat('RBRACKET')
-            return PortAccess(addr_expr, token)
+            port_node: AST = PortAccess(addr_expr, token)
+            # PORT[...].BIT のようなビットアクセスにも対応
+            if self.current_token and self.current_token.type == 'DOT':
+                self.eat('DOT')
+                bit_num_val = self._parse_const_integer()
+                bit_num_token = Token('INTEGER', bit_num_val)
+                return BitAccess(port_node, bit_num_token)
+            return port_node
 
         if token.type == 'ID':
             name_token = token
@@ -474,24 +481,23 @@ class Parser:
             # メソッド呼び出しとbitアクセス
             if self.current_token and self.current_token.type == 'DOT':
                 self.eat('DOT')
-                # DOTの後ろにIDが来る場合はメソッド呼び出し
-                if self.current_token and self.current_token.type == 'ID':
+                # DOTの後ろが「ID + LPAREN」ならメソッド呼び出し、それ以外はビットアクセス
+                if (self.current_token and self.current_token.type == 'ID'
+                        and self.peek_token and self.peek_token.type == 'LPAREN'):
                     method_token = self.current_token
                     self.eat('ID')
+                    self.eat('LPAREN')
                     args: list[AST] = []
-                    if self.current_token and self.current_token.type == 'LPAREN':
-                        self.eat('LPAREN')
-                        if self.current_token and self.current_token.type != 'RPAREN':
+                    if self.current_token and self.current_token.type != 'RPAREN':
+                        args.append(self.parse_expression())
+                        while self.current_token and self.current_token.type == 'COMMA':
+                            self.eat('COMMA')
                             args.append(self.parse_expression())
-                            while self.current_token and self.current_token.type == 'COMMA':
-                                self.eat('COMMA')
-                                args.append(self.parse_expression())
-                        self.eat('RPAREN')
+                    self.eat('RPAREN')
                     return MethodCall(VarAccess(name_token), method_token, args)
 
                 else:
-                    # ビットアクセス
-                    # ★ ビット番号にもconst変数を使えるようにする
+                    # ビットアクセス（ビット番号は整数リテラルまたはconst変数）
                     bit_num_val = self._parse_const_integer()
                     # BitAccessノードはトークンではなく数値を直接受け取るように変更するのが望ましい
                     bit_num_token = Token('INTEGER', bit_num_val)

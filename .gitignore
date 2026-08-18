@@ -12,6 +12,7 @@ bin/
 
 # assembly files
 output.*
+test/output/
 *.hlr
 *.map
 *.rel

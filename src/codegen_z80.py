@@ -13,6 +13,8 @@ class CodeGenerator:
         self.source_lines: list[str] = []
         self.last_commented_line: int = -1 # コメントの重複出力を防ぐ
         self.string_literals: dict[str, str] = {} # ★ 文字列とラベルを管理する辞書
+        self.current_function_name: str | None = None
+        self.entry_point: str = "init"
 
 
     def generate(self, node: AST, symbol_table: ScopedSymbolTable, source_lines: list[str]) -> str:
@@ -104,6 +106,10 @@ class CodeGenerator:
 
     def generic_visit(self, node: AST) -> None:
         raise NotImplementedError(f"No visit_{type(node).__name__} method")
+
+    def _error(self, message: str, token=None) -> None:
+        location = f" (line {token.line}, column {token.column})" if token else ""
+        raise Exception(f"Code generation error{location}: {message}")
 
     def visit_Program(self, node: Program) -> None:
         assert self.symbol_table is not None

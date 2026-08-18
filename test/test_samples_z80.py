@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from codegen_8086 import CodeGenerator
+from codegen_z80 import CodeGenerator
 from lexer import Lexer
 from parser import Parser
 
@@ -23,7 +23,7 @@ OUTPUT_DIR = Path(__file__).parent / "output"
     SAMPLE_SOURCES,
     ids=lambda path: path.name,
 )
-def test_sample_source_generates_8086_assembly(source_path: Path) -> None:
+def test_sample_source_generates_z80_assembly(source_path: Path) -> None:
     source_code = source_path.read_text(encoding="utf-8")
     source_lines = source_code.splitlines()
     tokens = list(Lexer(source_code).tokenize())
@@ -34,7 +34,7 @@ def test_sample_source_generates_8086_assembly(source_path: Path) -> None:
 
     # 生成したアセンブラをテスト後も確認できるよう保存しておく
     OUTPUT_DIR.mkdir(exist_ok=True)
-    (OUTPUT_DIR / f"{source_path.stem}.asm").write_text(assembly, encoding="utf-8")
+    (OUTPUT_DIR / f"{source_path.stem}.z80").write_text(assembly, encoding="utf-8")
 
     assert assembly.strip()
-    assert "segment .text" in assembly
+    assert "main:" in assembly

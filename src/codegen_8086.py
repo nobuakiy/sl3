@@ -4,7 +4,7 @@ from lexer import Token
 from symbol_table import ScopedSymbolTable, VariableSymbol, Symbol
 from parser import (AST, Type, Program, VarDecl, Assignment, IfStatement, WhileStatement,
                     FuncDecl, FuncCall, ReturnStatement, Block, ArrayAccess, BinOp,
-                    Number, VarAccess, Type, StringLiteral)
+                    Number, VarAccess, Type, StringLiteral, BitAccess, PortAccess, MethodCall)
 
 class CodeGenerator:
     def __init__(self) -> None:
@@ -93,7 +93,10 @@ class CodeGenerator:
         if local_var_size > 0:
             self.assembly_code.append(f"\tsub sp, {local_var_size}")
 
+        # ★ パース時にスコープから外れたローカルシンボルをコード生成中だけ再度参照可能にする
+        self.symbol_table.scopes.append(node.local_symbols)
         self.visit(node.body)
+        self.symbol_table.scopes.pop()
 
         self.assembly_code.append(f".L_RET_{func_name}:")
         self.assembly_code.append("\tmov sp, bp")
@@ -135,6 +138,37 @@ class CodeGenerator:
         else: # local
             self.assembly_code.append(f"\tmov ax, {size_directive} [bp{symbol.offset:+}]")
 
+    def visit_ArrayAccess(self, node: ArrayAccess) -> None:
+        var_name = node.var_node.value
+        symbol = self.symbol_table.lookup(var_name)
+        if symbol is None:
+            raise Exception(f"Undefined variable: {var_name}")
+
+        self.visit(node.index_expr) # インデックスがAXに入る
+        self.assembly_code.append("\tmov bx, ax")
+        if self.get_symbol_size(symbol) == 2:
+            self.assembly_code.append("\tshl bx, 1")
+
+        if symbol.scope == 'global':
+            self.assembly_code.append(f"\tmov ax, [{var_name} + bx]")
+        else: # local
+            self.assembly_code.append(f"\tmov ax, [bp{symbol.offset:+} + bx]")
+
+    def _emit_read_bit_base(self, base: AST) -> None:
+        """ビットアクセスの元となる値をAXに読み込む"""
+        if isinstance(base, PortAccess):
+            self.visit(base.address_expr)
+            self.assembly_code.append("\tmov dx, ax")
+            self.assembly_code.append("\tin al, dx")
+            self.assembly_code.append("\tmov ah, 0")
+        else:
+            self.visit(base)
+
+    def visit_BitAccess(self, node: BitAccess) -> None:
+        self._emit_read_bit_base(node.var_node)
+        mask = 1 << node.bit_num_token.value
+        self.assembly_code.append(f"\tand ax, {mask}")
+
     def visit_Assignment(self, node: Assignment) -> None:
         self._emit_source_comment(node)
         self.visit(node.right) # 結果がAXに入る
@@ -150,6 +184,31 @@ class CodeGenerator:
                 self.assembly_code.append(f"\tmov [{var_name}], {reg}")
             else: # local
                 self.assembly_code.append(f"\tmov {size_directive} [bp{symbol.offset:+}], {reg}")
+
+        elif isinstance(left_node, BitAccess):
+            # 右辺値(0/非0)を退避してから、元の値にビットを立てる/クリアする
+            mask = 1 << left_node.bit_num_token.value
+            base = left_node.var_node
+            self.assembly_code.append("\tmov cx, ax")
+            self._emit_read_bit_base(base)
+            clear_label, end_label = self.new_label(), self.new_label()
+            self.assembly_code.append("\tcmp cx, 0")
+            self.assembly_code.append(f"\tje {clear_label}")
+            self.assembly_code.append(f"\tor al, {mask}")
+            self.assembly_code.append(f"\tjmp {end_label}")
+            self.assembly_code.append(f"{clear_label}:")
+            self.assembly_code.append(f"\tand al, {(~mask) & 0xFF}")
+            self.assembly_code.append(f"{end_label}:")
+
+            if isinstance(base, PortAccess):
+                self.assembly_code.append("\tout dx, al")
+            elif isinstance(base, VarAccess):
+                var_name = base.value
+                symbol = self.symbol_table.lookup(var_name)
+                if symbol.scope == 'global':
+                    self.assembly_code.append(f"\tmov [{var_name}], al")
+                else: # local
+                    self.assembly_code.append(f"\tmov byte [bp{symbol.offset:+}], al")
 
     def visit_Block(self, node: Block) -> None:
         for stmt in node.statements:
@@ -216,6 +275,9 @@ class CodeGenerator:
         # ループインデックス用一時変数名
         index_var_name = f"__for_index_{loop_var}"
 
+        # ★ パース時にスコープから外れたローカルシンボル（ループ変数）を再度参照可能にする
+        self.symbol_table.scopes.append(node.local_symbols)
+
         # シンボルテーブルにインデックス変数を追加（なければ）
         if not self.symbol_table.lookup(index_var_name, current_scope_only=True):
             # int型のダミートークンを生成
@@ -252,7 +314,10 @@ class CodeGenerator:
         self.assembly_code.append(f"\tinc word [bp{index_offset:+}]")
         self.assembly_code.append(f"\tjmp {start_label}")
         self.assembly_code.append(f"{end_label}:")
-        
+
+        self.symbol_table.scopes.pop()
+
+
     def visit_ReturnStatement(self, node: ReturnStatement) -> None:
         self._emit_source_comment(node)
         if node.expr:
@@ -298,3 +363,29 @@ class CodeGenerator:
 
             if node.args:
                 self.assembly_code.append(f"\tadd sp, {len(node.args) * 2}")
+
+    def visit_MethodCall(self, node: MethodCall) -> None:
+        """StringBuffer 等のメソッド呼び出し。現状は StringBuffer.append のみ対応する最小実装。"""
+        self._emit_source_comment(node)
+        obj_name = node.var_node.value
+        symbol = self.symbol_table.lookup(obj_name)
+        if symbol is None:
+            raise Exception(f"Undefined variable: {obj_name}")
+
+        method_name = node.method_token.value
+        if method_name != "append":
+            raise Exception(f"Unknown method '{method_name}' on '{obj_name}'")
+
+        if not node.args or not isinstance(node.args[0], StringLiteral):
+            raise Exception("StringBuffer.append() currently only supports a single string literal argument.")
+
+        self.assembly_code.append(f"; {obj_name}.append(...)")
+        if symbol.scope == 'global':
+            self.assembly_code.append(f"\tmov ax, {obj_name}")
+        else: # local
+            self.assembly_code.append(f"\tlea ax, [bp{symbol.offset:+}]")
+        self.assembly_code.append("\tpush ax")
+        self.assembly_code.append("\tcall strcatl")
+
+        escaped_string = node.args[0].value.replace('\\n', '`, 10, `').replace('\\r', '`, 13, `')
+        self.assembly_code.append(f"\tdb `{escaped_string}`, 0")
