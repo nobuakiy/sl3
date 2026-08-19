@@ -1,7 +1,36 @@
 ; runtime.asm - StringBuffer Runtime Library
 ;    .area _CODE(CODE)
 
-PUBLIC SB_APPEND,SB_LENGTH,MUL16,DIV16
+PUBLIC SB_APPEND,SB_LENGTH,MUL16,DIV16,SL_PRINT
+
+; --- SL_PRINT ---
+; CP/M(BDOS)経由で、CALL命令の直後にインラインで置かれた
+; NULL終端文字列を出力し、文字列の直後に実行を戻す。
+; 8086版のsl_print/sl_printfと同じ「戻り先アドレス=データ」方式。
+; 破壊されるレジスタ: なし(AF,BC,DE,HLは内部で退避・復元)
+SL_PRINT:
+    ex (sp), hl     ; HL = 文字列の先頭アドレス, 元のHLをスタックへ退避
+    push af
+    push bc
+    push de
+.SLP_LOOP:
+    ld a, (hl)
+    or a
+    jr z, .SLP_DONE
+    push hl
+    ld e, a
+    ld c, 2         ; BDOS Function 2: Console Output
+    call 5
+    pop hl
+    inc hl
+    jr .SLP_LOOP
+.SLP_DONE:
+    inc hl          ; NULL終端バイトの次(=呼び出し元へ戻るアドレス)へ
+    pop de
+    pop bc
+    pop af
+    ex (sp), hl     ; 更新した戻り先アドレスをセットし、元のHLを復元
+    ret
 
 ; --- SB_APPEND ---
 ; StringBufferに文字列を追加する

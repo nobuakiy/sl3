@@ -55,6 +55,11 @@ class CodeGenerator:
                 self.assembly_code.append(f"\n; {source_line}")
                 self.last_commented_line = line_num
 
+    def _string_to_db_bytes(self, str_value: str) -> str:
+        """文字列リテラルを .db 用のバイト列文字列に変換する(\\n, \\rをエスケープ処理)"""
+        processed = str_value.replace('\\n', '\n').replace('\\r', '\r')
+        return ", ".join(str(b) for b in processed.encode('cp932'))
+
     def _get_string_label(self, str_value: str) -> str:
         """文字列に対応するラベルを取得。なければ新しいラベルを作成する"""
         if str_value in self.string_literals:
@@ -163,7 +168,7 @@ class CodeGenerator:
         # 2. 正しい順序でアセンブリコードを構築する
         self.assembly_code.append("\tORG 0x0100")
         self.assembly_code.append(f"\n\tPUBLIC\t{self.entry_point}") # リンカ用にエントリーポイントを公開
-        self.assembly_code.append("\tEXTERN SB_APPEND,SB_LENGTH,MUL16,DIV16")
+        self.assembly_code.append("\tEXTERN SB_APPEND,SB_LENGTH,MUL16,DIV16,SL_PRINT")
         self.assembly_code.append(f"{self.entry_point}:")
         self.assembly_code.append("\tld sp, 0xFFFE ; (RAMの最上位などに設定)")
         # TODO: グローバル変数の初期化コード (ROMからRAMへのデータコピー) をここに追加
@@ -176,7 +181,7 @@ class CodeGenerator:
 
         self.assembly_code.append("\n; --- Start Program ---")
         self.assembly_code.append("\tcall main")
-        self.assembly_code.append("\thalt")
+        self.assembly_code.append("\tjp 0 ; CP/M warm boot (return to CCP)")
 
         # ★ 関数定義のコードを追加
         self.assembly_code.append("\n; --- Functions ---")
@@ -190,8 +195,7 @@ class CodeGenerator:
             self.assembly_code.append("\n; --- String Literals ---")
             for str_val, label in self.string_literals.items():
                 self.assembly_code.append(f"{label}:")
-                byte_array = ", ".join(str(b) for b in str_val.encode('cp932'))
-                self.assembly_code.append(f"\t.db {byte_array}, 0 ; \"{str_val}\"")
+                self.assembly_code.append(f"\t.db {self._string_to_db_bytes(str_val)}, 0 ; \"{str_val}\"")
 
                 # # ★ 文字列がASCII印字可能文字のみで構成されているかチェック
                 # is_ascii_printable = all(32 <= ord(c) < 127 for c in str_val)
@@ -288,6 +292,18 @@ class CodeGenerator:
     def visit_FuncCall(self, node: FuncCall) -> None:
         # ★ node.name.value を node.name_token.value に修正
         func_name = node.name_token.value
+
+        # ★★★ print のための特別処理 (CP/M BDOS経由でSL_PRINTを呼ぶ) ★★★
+        if func_name == "print":
+            self.assembly_code.append("; Special call to SL_PRINT")
+            if not node.args or not isinstance(node.args[0], StringLiteral):
+                self._error("First argument to 'print' must be a string literal.", node.name_token)
+            first_arg = cast(StringLiteral, node.args[0])
+
+            self.assembly_code.append("\tcall SL_PRINT")
+            self.assembly_code.append(f"\t.db {self._string_to_db_bytes(first_arg.value)}, 0")
+            return
+
         self.assembly_code.append(f"; Function Call: {func_name}")
 
         # 引数を右から左へスタックに積む

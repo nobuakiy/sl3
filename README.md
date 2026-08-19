@@ -111,6 +111,27 @@ Z80 向けビルドでは `N80.dll` と `LK80.dll` を使います。
 
 現状の実装では、Z80 周りは補助ファイルやビルド手順の前提がやや強いため、必要に応じてプロジェクト内のスクリプトと生成物を確認してください。
 
+生成コードは CP/M の TPA 先頭 (`ORG 0x0100`) に配置され、`print("...")` は BDOS (`CALL 5`) 経由でコンソールに出力します。プログラムは最後に `JP 0` で CP/M のウォームブートへ戻ります。実際に動かして出力を確認する方法は [Docker での実行](#docker-での実行) を参照してください。
+
+## Docker での実行
+
+ビルド(アセンブル/リンク)そのものは行わず、**ビルド済みの成果物 (`main.hex` / `output.exe`) を実機相当の環境で動かして結果を確認する**ことに特化した Docker イメージを [docker](docker) 以下に用意しています。
+
+- Z80: [docker/z80-cpm](docker/z80-cpm) — CP/M エミュレータ [RunCPM](https://github.com/MockbaTheBorg/RunCPM) 上で `main.hex` を実行します。`.hex` は起動時に CP/M の `.COM` 形式へ変換されます。
+- 8086: [docker/dosbox-8086](docker/dosbox-8086) — [DOSBox](https://www.dosbox.com/) 上で `output.exe` を実行し、標準出力(`INT 21h`)の内容を表示します。
+
+PowerShell から次のように実行できます(初回はイメージのビルドが走ります)。
+
+```powershell
+# Z80: main.hex を実行 (z80.cmd などで事前にビルドしておく)
+.\docker\run-z80.ps1 .\build\output.hex
+
+# 8086: output.exe を実行 (nasm/alink で事前にビルドしておく)
+.\docker\run-8086.ps1 .\output.exe
+```
+
+いずれも `nasm`/`alink`/`dotnet`(N80.dll, LK80.dll)といったビルドツール自体はコンテナに含めていません。これらの外部ツールはライセンス上リポジトリに同梱できないため、ビルドはこれまで通りホスト側で行い、Docker は「動かして確認する」用途に限定しています。
+
 ## サンプル
 
 [test/sample.sl3](test/sample.sl3) には最小のサンプルがあります。
@@ -123,6 +144,8 @@ if (x > 0) {
 		return 0;
 }
 ```
+
+[test/hello_cpm.sl3](test/hello_cpm.sl3) は `print` を使った最小のサンプルで、[Docker での実行](#docker-での実行) の Z80/CP/M 環境での動作確認に使えます。
 
 ## ディレクトリ構成
 
